@@ -36,16 +36,22 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
     if (!isOwner) ownerOnly.push('tags');
   }
 
+  // Anyone-can-edit fields
+  if ('blurred' in body && typeof body.blurred === 'boolean') {
+    if (photo.hidden) {
+      return NextResponse.json(
+        { error: 'blurred is locked while hidden=true' },
+        { status: 400 },
+      );
+    }
+    data.blurred = body.blurred;
+  }
+
   if (ownerOnly.length) {
     return NextResponse.json(
       { error: `owner-only fields: ${ownerOnly.join(', ')}` },
       { status: 403 },
     );
-  }
-
-  // Anyone-can-edit fields
-  if ('blurred' in body && typeof body.blurred === 'boolean') {
-    data.blurred = body.blurred;
   }
 
   // Tags: replace whole set (owner only, already gated)
@@ -67,10 +73,22 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
   const updated = await prisma.photo.update({
     where: { id: photo.id },
     data,
-    include: { tags: { include: { tag: true } } },
+    include: {
+      tags: { include: { tag: true } },
+      views: {
+        where: { viewerName: user },
+        select: { viewerName: true },
+        take: 1,
+      },
+    },
   });
 
-  return NextResponse.json(serializePhoto(updated));
+  return NextResponse.json(
+    serializePhoto({
+      ...updated,
+      unseen: updated.ownerName !== user && updated.views.length === 0,
+    }),
+  );
 }
 
 export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {

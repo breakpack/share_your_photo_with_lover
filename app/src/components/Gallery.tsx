@@ -194,7 +194,32 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     return () => window.removeEventListener('paste', onPaste);
   }, [openUploaderWithFiles]);
 
-  const closeLightbox = useCallback(() => setLightboxIndex(null), []);
+  useEffect(() => {
+    const onPopState = () => {
+      setLightboxIndex((i) => (i == null ? i : null));
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const openLightbox = useCallback(
+    (index: number) => {
+      if (lightboxIndex == null) {
+        window.history.pushState({ photoshareLightbox: true }, '', window.location.href);
+      }
+      setLightboxIndex(index);
+    },
+    [lightboxIndex],
+  );
+
+  const closeLightbox = useCallback(() => {
+    if (lightboxIndex == null) return;
+    if ((window.history.state as any)?.photoshareLightbox) {
+      window.history.back();
+      return;
+    }
+    setLightboxIndex(null);
+  }, [lightboxIndex]);
   const navLightbox = useCallback(
     (delta: number) => {
       setLightboxIndex((i) => {
@@ -228,6 +253,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   }
 
   async function toggleBlurred(photo: Photo) {
+    if (photo.hidden) return;
     await patchPhoto(photo, { blurred: !photo.blurred });
   }
 
@@ -241,13 +267,26 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     await patchPhoto(photo, { tags }, true);
   }
 
+  const markViewed = useCallback(
+    async (photo: Photo) => {
+      if (photo.ownerName === currentUser || !photo.unseen) return;
+      const res = await fetch(`/api/photos/${photo.id}/view`, { method: 'POST' });
+      if (res.ok) {
+        setPhotos((prev) =>
+          prev.map((p) => (p.id === photo.id ? { ...p, unseen: false } : p)),
+        );
+      }
+    },
+    [currentUser],
+  );
+
   async function deletePhoto(photo: Photo) {
     if (photo.ownerName !== currentUser) return;
     if (!confirm(`삭제할까요? "${photo.filename}"`)) return;
     const res = await fetch(`/api/photos/${photo.id}`, { method: 'DELETE' });
     if (res.ok) {
       setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
-      setLightboxIndex(null);
+      closeLightbox();
       // Account for the removed row so pagination offsets stay right.
       setNextOffset((n) => Math.max(0, n - 1));
       refreshTags();
@@ -292,7 +331,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
               photos={photos}
               currentUser={currentUser}
               columns={columns}
-              onOpen={(i) => setLightboxIndex(i)}
+              onOpen={openLightbox}
             />
             <div ref={sentinelRef} className="h-8" />
             {loadingMore && (
@@ -322,6 +361,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
           onToggleBlurred={() => toggleBlurred(photos[lightboxIndex])}
           onUpdateCaption={(c) => updateCaption(photos[lightboxIndex], c)}
           onUpdateTags={(tags) => updateTags(photos[lightboxIndex], tags)}
+          onViewed={markViewed}
           onDelete={() => deletePhoto(photos[lightboxIndex])}
           allTags={allTags}
         />

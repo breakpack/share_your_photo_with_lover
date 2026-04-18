@@ -7,7 +7,8 @@ export function serializePhoto(p: any) {
     width: p.width,
     height: p.height,
     hidden: p.hidden,
-    blurred: p.blurred,
+    // Hidden mode enforces blur regardless of blurred flag.
+    blurred: Boolean(p.hidden || p.blurred),
     caption: p.caption,
     takenAt: p.takenAt,
     gpsLat: p.gpsLat,
@@ -17,6 +18,7 @@ export function serializePhoto(p: any) {
     artist: p.artist,
     ownerName: p.ownerName,
     createdAt: p.createdAt,
+    unseen: Boolean(p.unseen),
     tags: (p.tags ?? []).map((t: any) => ({ id: t.tag.id, name: t.tag.name })),
   };
 }

@@ -15,6 +15,7 @@ type Props = {
   onToggleBlurred: () => void;
   onUpdateCaption: (caption: string) => void;
   onUpdateTags: (tags: string[]) => void;
+  onViewed: (photo: Photo) => void;
   onDelete: () => void;
   allTags: TagSummary[];
 };
@@ -31,6 +32,7 @@ export default function Lightbox({
   onToggleBlurred,
   onUpdateCaption,
   onUpdateTags,
+  onViewed,
   onDelete,
   allTags,
 }: Props) {
@@ -58,6 +60,12 @@ export default function Lightbox({
 
   const isOwner = photo.ownerName === currentUser;
   const tagNames = photo.tags.map((t) => t.name);
+  const hiddenMode = photo.hidden;
+  const blurToggleLocked = hiddenMode;
+
+  useEffect(() => {
+    if (!isOwner && photo.unseen) onViewed(photo);
+  }, [isOwner, onViewed, photo]);
 
   function addTag(name: string) {
     const t = name.trim();
@@ -96,15 +104,20 @@ export default function Lightbox({
         </div>
         <button
           onClick={onToggleBlurred}
+          disabled={blurToggleLocked}
           className={
-            'rounded-lg px-2 sm:px-3 py-1.5 text-xs sm:text-sm shrink-0 ' +
+            'rounded-lg px-2 sm:px-3 py-1.5 text-xs sm:text-sm shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ' +
             (photo.blurred
               ? 'bg-purple-500/30 text-purple-200 hover:bg-purple-500/40'
               : 'bg-neutral-900 hover:bg-neutral-800')
           }
-          title="썸네일 블러 — 모든 사용자에게 적용. 누구나 토글 가능."
+          title={
+            blurToggleLocked
+              ? '가리기 모드에서는 블러가 고정됩니다. 올린 사람이 가리기를 해제해야 원본을 볼 수 있습니다.'
+              : '썸네일 블러 — 모든 사용자에게 적용. 누구나 토글 가능.'
+          }
         >
-          {photo.blurred ? '블러 해제' : '블러'}
+          {blurToggleLocked ? '블러 잠금' : photo.blurred ? '블러 해제' : '블러'}
         </button>
         {isOwner && (
           <>
@@ -139,7 +152,24 @@ export default function Lightbox({
       </div>
 
       <div className="flex-1 min-h-0 relative flex items-center justify-center select-none overflow-hidden">
-        {photo.mimeType.startsWith('video/') ? (
+        {hiddenMode ? (
+          photo.mimeType.startsWith('video/') ? (
+            <div className="w-full h-full flex items-center justify-center bg-neutral-900">
+              <div className="text-center px-6">
+                <div className="text-lg sm:text-xl font-medium text-neutral-200">가리기 모드</div>
+                <div className="text-sm text-neutral-400 mt-2">
+                  올린 사람이 해제할 때까지 블러 상태로 유지됩니다.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <img
+              src={`/api/photos/${photo.id}/thumb`}
+              alt={photo.filename}
+              className="max-w-full max-h-full object-contain blur-2xl scale-110"
+            />
+          )
+        ) : photo.mimeType.startsWith('video/') ? (
           <video
             key={photo.id}
             src={`/api/photos/${photo.id}/file`}
@@ -173,7 +203,7 @@ export default function Lightbox({
             ›
           </button>
         )}
-        {photo.caption && !showInfo && (
+        {photo.caption && !showInfo && !hiddenMode && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-[80%] bg-black/70 backdrop-blur px-4 py-2 rounded-xl text-center text-sm">
             {photo.caption}
           </div>
@@ -292,7 +322,7 @@ export default function Lightbox({
               <Row
                 label="공개 상태"
                 value={
-                  photo.hidden ? '가리기 (상대방에게 숨김)' : '공개'
+                  photo.hidden ? '가리기 (썸네일/원본 블러 잠금)' : '공개'
                 }
               />
               <Row label="블러" value={photo.blurred ? '켜짐' : '꺼짐'} />

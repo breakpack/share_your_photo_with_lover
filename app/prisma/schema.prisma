@@ -27,6 +27,7 @@ model Photo {
   ownerName  String
   createdAt  DateTime   @default(now())
   tags       TagOnPhoto[]
+  views      PhotoView[]
 
   @@index([createdAt])
   @@index([sizeBytes])
@@ -47,4 +48,15 @@ model TagOnPhoto {
 
   @@id([photoId, tagId])
   @@index([tagId])
+}
+
+model PhotoView {
+  photo      Photo     @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  photoId    String
+  viewerName String
+  viewedAt   DateTime  @default(now())
+
+  @@id([photoId, viewerName])
+  @@index([viewerName])
+  @@index([viewedAt])
 }

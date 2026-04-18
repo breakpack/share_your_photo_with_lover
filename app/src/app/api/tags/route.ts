@@ -13,11 +13,7 @@ export async function GET() {
   const tags = await prisma.tag.findMany({
     where: {
       photos: {
-        some: {
-          photo: {
-            OR: [{ ownerName: user }, { hidden: false }],
-          },
-        },
+        some: {},
       },
     },
     orderBy: { name: 'asc' },

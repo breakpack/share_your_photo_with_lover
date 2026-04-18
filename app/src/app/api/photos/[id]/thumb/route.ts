@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import { Readable } from 'node:stream';
+import sharp from 'sharp';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { thumbPath } from '@/lib/storage';
@@ -15,9 +16,6 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
 
   const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
   if (!photo) return new Response('not found', { status: 404 });
-  if (photo.hidden && photo.ownerName !== user) {
-    return new Response('forbidden', { status: 403 });
-  }
 
   const file = thumbPath(photo.id);
   let stat;
@@ -25,6 +23,26 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
     stat = await fs.stat(file);
   } catch {
     return new Response('missing file', { status: 404 });
+  }
+
+  if (photo.hidden) {
+    try {
+      const masked = await sharp(file, { failOn: 'none' })
+        .blur(18)
+        .jpeg({ quality: 70, mozjpeg: true })
+        .toBuffer();
+      const body = Uint8Array.from(masked);
+      return new Response(body, {
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-length': String(masked.length),
+          'cache-control': 'private, no-store',
+        },
+      });
+    } catch (err) {
+      console.error('hidden thumb blur failed', err);
+      return new Response('thumbnail processing failed', { status: 500 });
+    }
   }
 
   const nodeStream = createReadStream(file);

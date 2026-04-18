@@ -399,7 +399,7 @@ function BatchControls({
               <button
                 onClick={() => onApplyHidden(true)}
                 className="bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 rounded px-2.5 py-1 text-xs"
-                title="가리기: 올린 사람에게만 보임"
+                title="가리기: 썸네일/원본 모두 블러 잠금. 올린 사람만 해제 가능"
               >
                 가리기
               </button>
@@ -610,7 +610,7 @@ function ItemCard({
                   ? 'bg-amber-500/30 text-amber-200'
                   : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-400')
               }
-              title="가리기: 올린 사람에게만 보임"
+              title="가리기: 썸네일/원본 모두 블러 잠금. 올린 사람만 해제 가능"
             >
               가리기
             </button>

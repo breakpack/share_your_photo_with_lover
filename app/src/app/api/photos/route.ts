@@ -29,18 +29,21 @@ export async function GET(req: NextRequest) {
     parseInt(url.searchParams.get('offset') || '0', 10) || 0,
   );
 
-  const orderBy =
+  const orderBy: any =
     sort === 'time-asc'
       ? { createdAt: 'asc' as const }
-      : sort === 'size-desc'
-        ? { sizeBytes: 'desc' as const }
-        : sort === 'size-asc'
-          ? { sizeBytes: 'asc' as const }
-          : { createdAt: 'desc' as const };
+      : sort === 'taken-desc'
+        ? [
+            { takenAt: { sort: 'desc' as const, nulls: 'last' as const } },
+            { createdAt: 'desc' as const },
+          ]
+        : sort === 'size-desc'
+          ? { sizeBytes: 'desc' as const }
+          : sort === 'size-asc'
+            ? { sizeBytes: 'asc' as const }
+            : { createdAt: 'desc' as const };
 
-  const where: any = {
-    OR: [{ ownerName: user }, { hidden: false }],
-  };
+  const where: any = {};
 
   if (tagNames.length) {
     where.AND = tagNames.map((name) => ({
@@ -54,11 +57,23 @@ export async function GET(req: NextRequest) {
     orderBy,
     skip: offset,
     take: limit + 1,
-    include: { tags: { include: { tag: true } } },
+    include: {
+      tags: { include: { tag: true } },
+      views: {
+        where: { viewerName: user },
+        select: { viewerName: true },
+        take: 1,
+      },
+    },
   });
 
   const hasMore = rows.length > limit;
-  const photos = (hasMore ? rows.slice(0, limit) : rows).map(serializePhoto);
+  const photos = (hasMore ? rows.slice(0, limit) : rows).map((row) =>
+    serializePhoto({
+      ...row,
+      unseen: row.ownerName !== user && row.views.length === 0,
+    }),
+  );
 
   return NextResponse.json({
     photos,

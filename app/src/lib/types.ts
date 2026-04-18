@@ -20,7 +20,13 @@ export type Photo = {
   artist: string | null;
   ownerName: string;
   createdAt: string;
+  unseen: boolean;
   tags: PhotoTag[];
 };
 
-export type SortKey = 'time-desc' | 'time-asc' | 'size-desc' | 'size-asc';
+export type SortKey =
+  | 'time-desc'
+  | 'time-asc'
+  | 'size-desc'
+  | 'size-asc'
+  | 'taken-desc';

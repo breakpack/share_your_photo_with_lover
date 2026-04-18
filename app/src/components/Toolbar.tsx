@@ -105,7 +105,7 @@ export default function Toolbar({
 
         <div className="hidden md:block flex-1" />
 
-        <div className="flex items-center bg-neutral-800 rounded-lg shrink-0 overflow-hidden">
+        <div className="hidden sm:flex items-center bg-neutral-800 rounded-lg shrink-0 overflow-hidden">
           <button
             onClick={dec}
             disabled={columns <= MIN_COLS}
@@ -136,6 +136,7 @@ export default function Toolbar({
         >
           <option value="time-desc">최신순</option>
           <option value="time-asc">오래된순</option>
+          <option value="taken-desc">촬영일 최신순</option>
           <option value="size-desc">큰 크기순</option>
           <option value="size-asc">작은 크기순</option>
         </select>
@@ -160,17 +161,26 @@ export default function Toolbar({
         </div>
         <button
           onClick={onLogout}
-          className="sm:hidden text-neutral-400 hover:text-white shrink-0 px-2 py-1 text-xs"
+          className="sm:hidden bg-neutral-800 hover:bg-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-neutral-100 shrink-0"
           title={`${currentUser} 로그아웃`}
           aria-label="로그아웃"
         >
-          ⎋
+          로그아웃
         </button>
       </div>
 
       {/* Mobile filter drawer */}
       {filterOpen && (
         <div className="md:hidden border-t border-neutral-800 p-3 max-h-[50vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-3 pb-2 border-b border-neutral-800">
+            <span className="text-sm text-neutral-300">{currentUser}</span>
+            <button
+              onClick={onLogout}
+              className="bg-neutral-800 hover:bg-neutral-700 rounded px-2.5 py-1 text-xs text-neutral-100"
+            >
+              로그아웃
+            </button>
+          </div>
           {tags.length === 0 ? (
             <div className="text-sm text-neutral-500">태그가 없습니다.</div>
           ) : (
