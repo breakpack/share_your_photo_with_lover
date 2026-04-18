@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Photo {
+  id         String     @id @default(cuid())
+  filename   String
+  mimeType   String
+  sizeBytes  BigInt
+  width      Int?
+  height     Int?
+  hidden     Boolean    @default(false)
+  blurred    Boolean    @default(false)
+  caption    String?
+  takenAt    DateTime?
+  gpsLat     Float?
+  gpsLng     Float?
+  cameraMake String?
+  cameraModel String?
+  artist     String?
+  exifJson   Json?
+  ownerName  String
+  createdAt  DateTime   @default(now())
+  tags       TagOnPhoto[]
+
+  @@index([createdAt])
+  @@index([sizeBytes])
+  @@index([takenAt])
+}
+
+model Tag {
+  id     String       @id @default(cuid())
+  name   String       @unique
+  photos TagOnPhoto[]
+}
+
+model TagOnPhoto {
+  photo   Photo  @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  photoId String
+  tag     Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  tagId   String
+
+  @@id([photoId, tagId])
+  @@index([tagId])
+}

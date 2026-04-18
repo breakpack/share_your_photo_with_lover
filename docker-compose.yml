@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: photoshare
+      POSTGRES_PASSWORD: photoshare
+      POSTGRES_DB: photoshare
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U photoshare -d photoshare"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://photoshare:photoshare@db:5432/photoshare
+      PHOTO_STORAGE_DIR: /data/photos
+      USER1_NAME: ${USER1_NAME}
+      USER1_PASSWORD: ${USER1_PASSWORD}
+      USER2_NAME: ${USER2_NAME}
+      USER2_PASSWORD: ${USER2_PASSWORD}
+      SESSION_SECRET: ${SESSION_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      NODE_ENV: production
+    ports:
+      - "3018:3000"
+    volumes:
+      - photo_data:/data/photos
+
+volumes:
+  db_data:
+  photo_data:
