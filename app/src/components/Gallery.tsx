@@ -311,6 +311,8 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         onSortChange={setSort}
         columns={columns}
         onColumnsChange={setColumns}
+        refreshing={loading}
+        onRefreshClick={reset}
         onUploadClick={() => {
           setPendingFiles(null);
           setUploaderOpen(true);

@@ -12,6 +12,8 @@ type Props = {
   onSortChange: (s: SortKey) => void;
   columns: number;
   onColumnsChange: (n: number) => void;
+  refreshing: boolean;
+  onRefreshClick: () => void;
   onUploadClick: () => void;
   onLogout: () => void;
 };
@@ -28,6 +30,8 @@ export default function Toolbar({
   onSortChange,
   columns,
   onColumnsChange,
+  refreshing,
+  onRefreshClick,
   onUploadClick,
   onLogout,
 }: Props) {
@@ -47,7 +51,10 @@ export default function Toolbar({
   return (
     <header className="fixed top-0 inset-x-0 bg-black/70 backdrop-blur-xl border-b border-neutral-800 z-30">
       <div className="h-14 flex items-center px-3 gap-2">
-        <div className="font-semibold text-base sm:text-lg shrink-0">PhotoShare</div>
+        <div className="font-semibold text-base sm:text-lg shrink-0">
+          <span className="sm:hidden">PS</span>
+          <span className="hidden sm:inline">PhotoShare</span>
+        </div>
 
         {/* Desktop: inline tag chips */}
         <div className="hidden md:flex gap-1 items-center flex-1 min-w-0 overflow-x-auto no-scrollbar pl-2 ml-2 border-l border-neutral-800">
@@ -132,7 +139,7 @@ export default function Toolbar({
         <select
           value={sort}
           onChange={(e) => onSortChange(e.target.value as SortKey)}
-          className="bg-neutral-800 rounded-lg px-2 py-1.5 text-xs sm:text-sm outline-none shrink-0"
+          className="bg-neutral-800 rounded-lg px-2 py-1.5 text-xs sm:text-sm outline-none shrink-0 w-[96px] sm:w-auto"
         >
           <option value="time-desc">최신순</option>
           <option value="time-asc">오래된순</option>
@@ -140,6 +147,19 @@ export default function Toolbar({
           <option value="size-desc">큰 크기순</option>
           <option value="size-asc">작은 크기순</option>
         </select>
+
+        <button
+          onClick={onRefreshClick}
+          disabled={refreshing}
+          className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-lg px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm shrink-0"
+          aria-label="새로고침"
+          title="새로고침"
+        >
+          <span className={'inline-block ' + (refreshing ? 'animate-spin' : '')}>
+            ↻
+          </span>
+          <span className="hidden sm:inline ml-1">새로고침</span>
+        </button>
 
         <button
           onClick={onUploadClick}
@@ -161,7 +181,7 @@ export default function Toolbar({
         </div>
         <button
           onClick={onLogout}
-          className="sm:hidden bg-neutral-800 hover:bg-neutral-700 rounded-lg px-2.5 py-1.5 text-xs text-neutral-100 shrink-0"
+          className="sm:hidden bg-neutral-800 hover:bg-neutral-700 rounded-lg px-2 py-1.5 text-[11px] text-neutral-100 shrink-0"
           title={`${currentUser} 로그아웃`}
           aria-label="로그아웃"
         >
