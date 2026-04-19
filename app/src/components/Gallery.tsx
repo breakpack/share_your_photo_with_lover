@@ -12,6 +12,7 @@ const PAGE_SIZE = 60;
 export default function Gallery({ currentUser }: { currentUser: string }) {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [nextOffset, setNextOffset] = useState(0);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -69,12 +70,17 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   }, []);
 
   const fetchPage = useCallback(
-    async (offset: number) => {
+    async (opts: { offset: number; cursor: string | null }) => {
+      const sourceCreatedSort = sort === 'source-created-desc' || sort === 'taken-desc';
       const params = new URLSearchParams({
         sort,
         limit: String(PAGE_SIZE),
-        offset: String(offset),
       });
+      if (sourceCreatedSort) {
+        if (opts.cursor) params.set('cursor', opts.cursor);
+      } else {
+        params.set('offset', String(opts.offset));
+      }
       if (selectedTags.length) params.set('tags', selectedTags.join(','));
       const res = await fetch(`/api/photos?${params}`);
       if (res.status === 401) {
@@ -85,7 +91,8 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
       return (await res.json()) as {
         photos: Photo[];
         hasMore: boolean;
-        nextOffset: number;
+        nextOffset: number | null;
+        nextCursor: string | null;
       };
     },
     [sort, selectedTags],
@@ -94,11 +101,12 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   const reset = useCallback(async () => {
     const seq = ++requestSeq.current;
     setLoading(true);
-    const [data] = await Promise.all([fetchPage(0), refreshTags()]);
+    const [data] = await Promise.all([fetchPage({ offset: 0, cursor: null }), refreshTags()]);
     if (seq !== requestSeq.current) return;
     if (data) {
       setPhotos(data.photos);
-      setNextOffset(data.nextOffset);
+      setNextOffset(data.nextOffset ?? 0);
+      setNextCursor(data.nextCursor ?? null);
       setHasMore(data.hasMore);
     }
     setLoading(false);
@@ -108,7 +116,11 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     if (loadingMore || !hasMore) return;
     const seq = requestSeq.current;
     setLoadingMore(true);
-    const data = await fetchPage(nextOffset);
+    const sourceCreatedSort = sort === 'source-created-desc' || sort === 'taken-desc';
+    const data = await fetchPage({
+      offset: sourceCreatedSort ? 0 : nextOffset,
+      cursor: sourceCreatedSort ? nextCursor : null,
+    });
     if (seq !== requestSeq.current) {
       setLoadingMore(false);
       return;
@@ -120,11 +132,12 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         const fresh = data.photos.filter((p) => !seen.has(p.id));
         return [...prev, ...fresh];
       });
-      setNextOffset(data.nextOffset);
+      setNextOffset(data.nextOffset ?? nextOffset);
+      setNextCursor(data.nextCursor ?? nextCursor);
       setHasMore(data.hasMore);
     }
     setLoadingMore(false);
-  }, [fetchPage, hasMore, loadingMore, nextOffset]);
+  }, [fetchPage, hasMore, loadingMore, nextCursor, nextOffset, sort]);
 
   // Reset when filter/sort changes
   useEffect(() => {
@@ -293,7 +306,12 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   async function patchPhoto(photo: Photo, patch: any, refetchTags = false) {
     const updated = await patchPhotoById(photo.id, patch);
     if (updated) {
-      setPhotos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setPhotos((prev) =>
+        sortPhotosLocal(
+          prev.map((p) => (p.id === updated.id ? updated : p)),
+          sort,
+        ),
+      );
       if (refetchTags) refreshTags();
     }
   }
@@ -314,7 +332,12 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
       ).filter((p): p is Photo => Boolean(p));
       if (updated.length) {
         const byId = new Map(updated.map((p) => [p.id, p]));
-        setPhotos((prev) => prev.map((p) => byId.get(p.id) ?? p));
+        setPhotos((prev) =>
+          sortPhotosLocal(
+            prev.map((p) => byId.get(p.id) ?? p),
+            sort,
+          ),
+        );
       }
     } finally {
       setBulkBusy(false);
@@ -409,10 +432,15 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         return false;
       }
       const updated = await res.json();
-      setPhotos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setPhotos((prev) =>
+        sortPhotosLocal(
+          prev.map((p) => (p.id === updated.id ? updated : p)),
+          sort,
+        ),
+      );
       return true;
     },
-    [],
+    [sort],
   );
 
   async function deletePhoto(photo: Photo) {
@@ -599,4 +627,55 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
       )}
     </div>
   );
+}
+
+function sortPhotosLocal(list: Photo[], sort: SortKey): Photo[] {
+  const out = [...list];
+  out.sort((a, b) => comparePhoto(a, b, sort));
+  return out;
+}
+
+function comparePhoto(a: Photo, b: Photo, sort: SortKey): number {
+  if (sort === 'source-created-desc' || sort === 'taken-desc') {
+    const aSource = asMsOrNull(a.sourceCreatedAt) ?? asMs(a.createdAt);
+    const bSource = asMsOrNull(b.sourceCreatedAt) ?? asMs(b.createdAt);
+    if (aSource !== bSource) return bSource - aSource;
+    const aCreated = asMs(a.createdAt);
+    const bCreated = asMs(b.createdAt);
+    if (aCreated !== bCreated) return bCreated - aCreated;
+    return b.id.localeCompare(a.id);
+  }
+  if (sort === 'time-desc') {
+    const aCreated = asMs(a.createdAt);
+    const bCreated = asMs(b.createdAt);
+    if (aCreated !== bCreated) return bCreated - aCreated;
+    return b.id.localeCompare(a.id);
+  }
+  if (sort === 'time-asc') {
+    const aCreated = asMs(a.createdAt);
+    const bCreated = asMs(b.createdAt);
+    if (aCreated !== bCreated) return aCreated - bCreated;
+    return a.id.localeCompare(b.id);
+  }
+  if (sort === 'size-desc') {
+    if (a.sizeBytes !== b.sizeBytes) return b.sizeBytes - a.sizeBytes;
+    return b.id.localeCompare(a.id);
+  }
+  if (sort === 'size-asc') {
+    if (a.sizeBytes !== b.sizeBytes) return a.sizeBytes - b.sizeBytes;
+    return a.id.localeCompare(b.id);
+  }
+  return 0;
+}
+
+function asMs(v: string | null): number {
+  if (!v) return 0;
+  const n = Date.parse(v);
+  return Number.isNaN(n) ? 0 : n;
+}
+
+function asMsOrNull(v: string | null): number | null {
+  if (!v) return null;
+  const n = Date.parse(v);
+  return Number.isNaN(n) ? null : n;
 }

@@ -7,6 +7,7 @@ import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { ensureStorage, originalPath, thumbPath } from '@/lib/storage';
 import { serializePhoto } from '@/lib/serialize';
+import { enqueueBackgroundJob } from '@/lib/background-queue';
 import {
   emptyImageMetadata,
   extractImageMetadata,
@@ -31,15 +32,20 @@ export async function POST(req: NextRequest) {
   const url = new URL(req.url);
   const filename = decodeURIComponent(url.searchParams.get('filename') || 'photo');
   const mimeType = req.headers.get('content-type') || 'application/octet-stream';
+  const bulkMode = url.searchParams.get('bulk') === '1';
   const hidden = url.searchParams.get('hidden') === '1';
   const blurred = url.searchParams.get('blurred') === '1';
   const caption = url.searchParams.get('caption') || null;
   const clientLastModified = parseEpochMs(req.headers.get('x-file-last-modified'));
   const tagNamesParam = url.searchParams.get('tags') || '';
-  const tagNames = tagNamesParam
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const tagNames = Array.from(
+    new Set(
+      tagNamesParam
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  );
 
   const isImage = mimeType.startsWith('image/');
   const isVideo = mimeType.startsWith('video/');
@@ -75,46 +81,61 @@ export async function POST(req: NextRequest) {
 
     const imageMeta = isImage ? await extractImageMetadata(dest) : emptyImageMetadata();
     if (isImage) {
-      try {
-        await generateThumbnail(dest, thumbPath(photo.id), mimeType);
-      } catch (err) {
-        console.error('thumbnail failed', err);
+      if (bulkMode) {
+        enqueueBackgroundJob(async () => {
+          try {
+            await generateThumbnail(dest, thumbPath(photo.id), mimeType);
+          } catch (err) {
+            console.error('thumbnail deferred failed', err);
+          }
+        });
+      } else {
+        try {
+          await generateThumbnail(dest, thumbPath(photo.id), mimeType);
+        } catch (err) {
+          console.error('thumbnail failed', err);
+        }
       }
     }
 
-    const duplicateRows = await prisma.photo.findMany({
-      where: { filename, id: { not: photo.id } },
-      select: { id: true },
-    });
-    const hasDuplicateFilename = duplicateRows.length > 0;
+    const hasDuplicateFilename =
+      (await prisma.photo.count({ where: { filename } })) > 1;
     const effectiveTagNames = hasDuplicateFilename
       ? Array.from(new Set([...tagNames, DUPLICATE_FILENAME_TAG]))
       : tagNames;
 
-    let tagConnects: { tagId: string }[] = [];
     const tagByName = new Map<string, { id: string; name: string }>();
     if (effectiveTagNames.length) {
-      const tags = await Promise.all(
-        effectiveTagNames.map((name) =>
-          prisma.tag.upsert({ where: { name }, update: {}, create: { name } }),
-        ),
-      );
+      await prisma.tag.createMany({
+        data: effectiveTagNames.map((name) => ({ name })),
+        skipDuplicates: true,
+      });
+      const tags = await prisma.tag.findMany({
+        where: { name: { in: effectiveTagNames } },
+        select: { id: true, name: true },
+      });
       for (const tag of tags) {
-        tagByName.set(tag.name, { id: tag.id, name: tag.name });
+        tagByName.set(tag.name, tag);
       }
-      tagConnects = tags.map((t) => ({ tagId: t.id }));
+
+      if (tags.length) {
+        await prisma.tagOnPhoto.createMany({
+          data: tags.map((t) => ({ photoId: photo.id, tagId: t.id })),
+          skipDuplicates: true,
+        });
+      }
     }
 
     if (hasDuplicateFilename) {
       const duplicateTagId = tagByName.get(DUPLICATE_FILENAME_TAG)?.id;
       if (duplicateTagId) {
-        await prisma.tagOnPhoto.createMany({
-          data: duplicateRows.map((row) => ({
-            photoId: row.id,
-            tagId: duplicateTagId,
-          })),
-          skipDuplicates: true,
-        });
+        await prisma.$executeRaw`
+          INSERT INTO "TagOnPhoto" ("photoId", "tagId")
+          SELECT p.id, ${duplicateTagId}
+          FROM "Photo" p
+          WHERE p."filename" = ${filename}
+          ON CONFLICT ("photoId", "tagId") DO NOTHING
+        `;
       }
     }
 
@@ -133,9 +154,6 @@ export async function POST(req: NextRequest) {
         cameraModel: imageMeta.cameraModel,
         artist: imageMeta.artist,
         exifJson: imageMeta.raw ?? undefined,
-        tags: tagConnects.length
-          ? { create: tagConnects.map((t) => ({ tagId: t.tagId })) }
-          : undefined,
       },
       include: { tags: { include: { tag: true } } },
     });

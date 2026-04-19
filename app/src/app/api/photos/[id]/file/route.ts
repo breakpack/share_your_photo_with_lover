@@ -9,15 +9,29 @@ import { convertHeicToJpegBuffer, isHeicMime } from '@/lib/heic';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const NO_STORE = 'private, no-store, max-age=0, must-revalidate';
+
+function secureHeaders(init?: HeadersInit) {
+  const headers = new Headers(init);
+  headers.set('cache-control', NO_STORE);
+  headers.set('pragma', 'no-cache');
+  headers.set('expires', '0');
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('cross-origin-resource-policy', 'same-origin');
+  const vary = headers.get('vary');
+  if (!vary) headers.set('vary', 'Cookie');
+  else if (!vary.toLowerCase().includes('cookie')) headers.set('vary', `${vary}, Cookie`);
+  return headers;
+}
 
 export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const user = getCurrentUser();
-  if (!user) return new Response('unauthorized', { status: 401 });
+  if (!user) return new Response('unauthorized', { status: 401, headers: secureHeaders() });
 
   const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
-  if (!photo) return new Response('not found', { status: 404 });
+  if (!photo) return new Response('not found', { status: 404, headers: secureHeaders() });
   if (photo.hidden && photo.ownerName !== user) {
-    return new Response('forbidden', { status: 403 });
+    return new Response('forbidden', { status: 403, headers: secureHeaders() });
   }
 
   const file = originalPath(photo.id);
@@ -25,7 +39,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   try {
     stat = await fs.stat(file);
   } catch {
-    return new Response('missing file', { status: 404 });
+    return new Response('missing file', { status: 404, headers: secureHeaders() });
   }
 
   if (isHeicMime(photo.mimeType)) {
@@ -34,15 +48,14 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       const jpeg = await convertHeicToJpegBuffer(raw, 0.92);
       const body = Uint8Array.from(jpeg);
       return new Response(body, {
-        headers: {
+        headers: secureHeaders({
           'content-type': 'image/jpeg',
           'content-length': String(body.length),
-          'cache-control': 'private, max-age=31536000, immutable',
-        },
+        }),
       });
     } catch (err) {
       console.error('heic file transcode failed', err);
-      return new Response('file decoding failed', { status: 500 });
+      return new Response('file decoding failed', { status: 500, headers: secureHeaders() });
     }
   }
 
@@ -65,20 +78,19 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       ) {
         return new Response(null, {
           status: 416,
-          headers: { 'content-range': `bytes */${size}` },
+          headers: secureHeaders({ 'content-range': `bytes */${size}` }),
         });
       }
       const nodeStream = createReadStream(file, { start, end });
       const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
       return new Response(webStream, {
         status: 206,
-        headers: {
+        headers: secureHeaders({
           'content-type': photo.mimeType,
           'content-length': String(end - start + 1),
           'content-range': `bytes ${start}-${end}/${size}`,
           'accept-ranges': 'bytes',
-          'cache-control': 'private, max-age=31536000, immutable',
-        },
+        }),
       });
     }
   }
@@ -87,11 +99,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
 
   return new Response(webStream, {
-    headers: {
+    headers: secureHeaders({
       'content-type': photo.mimeType,
       'content-length': String(size),
       'accept-ranges': 'bytes',
-      'cache-control': 'private, max-age=31536000, immutable',
-    },
+    }),
   });
 }

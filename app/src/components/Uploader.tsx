@@ -26,12 +26,19 @@ type Props = {
 
 let idCounter = 0;
 const nextId = () => `u${Date.now()}_${idCounter++}`;
+const DEFAULT_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 6;
+const RETRY_LIMIT = 2;
+const RETRY_BASE_DELAY_MS = 1000;
+const REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
+const PROGRESS_THROTTLE_MS = 140;
 
 export default function Uploader({ initialFiles, allTags, onClose, onDone }: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const progressRef = useRef<Record<string, { ts: number; pct: number }>>({});
 
   useEffect(() => {
     if (initialFiles && initialFiles.length) addFiles(initialFiles);
@@ -130,11 +137,21 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
     setItems((prev) => prev.map((p) => (p.id === id ? { ...p, caption } : p)));
   }
 
-  async function uploadOne(item: Item): Promise<boolean> {
+  function patchItem(itemId: string, patch: Partial<Item>) {
+    setItems((prev) =>
+      prev.map((p) => (p.id === itemId ? { ...p, ...patch } : p)),
+    );
+  }
+
+  async function uploadOneAttempt(
+    item: Item,
+    opts: { bulkMode: boolean },
+  ): Promise<{ ok: boolean; retryable: boolean; message: string }> {
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
       const params = new URLSearchParams();
       params.set('filename', item.file.name);
+      if (opts.bulkMode) params.set('bulk', '1');
       if (item.hidden) params.set('hidden', '1');
       if (item.blurred) params.set('blurred', '1');
       if (item.caption.trim()) {
@@ -146,57 +163,81 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
         'content-type',
         item.file.type || 'application/octet-stream',
       );
+      xhr.timeout = REQUEST_TIMEOUT_MS;
       if (Number.isFinite(item.file.lastModified) && item.file.lastModified > 0) {
         xhr.setRequestHeader('x-file-last-modified', String(item.file.lastModified));
       }
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
           const pct = Math.round((e.loaded / e.total) * 100);
-          setItems((prev) =>
-            prev.map((p) => (p.id === item.id ? { ...p, progress: pct } : p)),
-          );
+          const now = Date.now();
+          const prev = progressRef.current[item.id];
+          const fastTick =
+            prev &&
+            now - prev.ts < PROGRESS_THROTTLE_MS &&
+            pct < 100 &&
+            pct - prev.pct < 3;
+          if (fastTick) return;
+          progressRef.current[item.id] = { ts: now, pct };
+          patchItem(item.id, { progress: pct });
         }
       };
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          setItems((prev) =>
-            prev.map((p) =>
-              p.id === item.id ? { ...p, status: 'done', progress: 100 } : p,
-            ),
-          );
-          resolve(true);
+          patchItem(item.id, {
+            status: 'done',
+            progress: 100,
+            errorMessage: undefined,
+          });
+          resolve({ ok: true, retryable: false, message: '' });
         } else {
-          setItems((prev) =>
-            prev.map((p) =>
-              p.id === item.id
-                ? {
-                    ...p,
-                    status: 'error',
-                    errorMessage: xhr.responseText || `HTTP ${xhr.status}`,
-                  }
-                : p,
-            ),
-          );
-          resolve(false);
+          const msg = xhr.responseText || `HTTP ${xhr.status}`;
+          resolve({
+            ok: false,
+            retryable: xhr.status >= 500 || xhr.status === 429 || xhr.status === 408,
+            message: msg,
+          });
         }
       };
       xhr.onerror = () => {
-        setItems((prev) =>
-          prev.map((p) =>
-            p.id === item.id
-              ? { ...p, status: 'error', errorMessage: 'network error' }
-              : p,
-          ),
-        );
-        resolve(false);
+        resolve({ ok: false, retryable: true, message: 'network error' });
       };
-      setItems((prev) =>
-        prev.map((p) =>
-          p.id === item.id ? { ...p, status: 'uploading', progress: 0 } : p,
-        ),
-      );
+      xhr.ontimeout = () => {
+        resolve({ ok: false, retryable: true, message: 'upload timeout' });
+      };
+      patchItem(item.id, {
+        status: 'uploading',
+        progress: 0,
+        errorMessage: undefined,
+      });
       xhr.send(item.file);
     });
+  }
+
+  async function uploadOne(item: Item, opts: { bulkMode: boolean }) {
+    let lastMessage = '';
+    const maxAttempts = RETRY_LIMIT + 1;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const res = await uploadOneAttempt(item, opts);
+      if (res.ok) return true;
+      lastMessage = res.message;
+
+      if (!res.retryable || attempt >= maxAttempts) {
+        patchItem(item.id, {
+          status: 'error',
+          errorMessage: lastMessage || 'upload failed',
+        });
+        return false;
+      }
+
+      patchItem(item.id, {
+        status: 'uploading',
+        errorMessage: `재시도 ${attempt}/${RETRY_LIMIT}...`,
+      });
+      await sleep(RETRY_BASE_DELAY_MS * attempt);
+    }
+    patchItem(item.id, { status: 'error', errorMessage: lastMessage || 'upload failed' });
+    return false;
   }
 
   async function startUpload() {
@@ -204,28 +245,19 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
     const queue = items.filter((it) => it.status === 'idle' || it.status === 'error');
     if (!queue.length) return;
     setUploading(true);
+    const bulkMode = queue.length >= 80;
 
     // Worker pool: up to CONCURRENCY uploads in flight at once. Each worker
     // pulls the next index from a shared cursor until the queue is drained.
-    const CONCURRENCY = 3;
+    const CONCURRENCY = pickUploadConcurrency(queue);
     let cursor = 0;
     let anyOk = false;
-
-    const getFresh = (id: string): Promise<Item> =>
-      new Promise((resolve) => {
-        setItems((prev) => {
-          const f = prev.find((p) => p.id === id);
-          resolve(f!);
-          return prev;
-        });
-      });
 
     const worker = async () => {
       while (true) {
         const i = cursor++;
         if (i >= queue.length) return;
-        const fresh = await getFresh(queue[i].id);
-        const ok = await uploadOne(fresh);
+        const ok = await uploadOne(queue[i], { bulkMode });
         if (ok) anyOk = true;
       }
     };
@@ -239,6 +271,19 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
 
   const selectedCount = items.filter((i) => i.selected).length;
   const canUpload = items.some((i) => i.status === 'idle' || i.status === 'error');
+  const uploadStats = useMemo(() => {
+    let idle = 0;
+    let uploadingCount = 0;
+    let done = 0;
+    let error = 0;
+    for (const it of items) {
+      if (it.status === 'idle') idle += 1;
+      if (it.status === 'uploading') uploadingCount += 1;
+      if (it.status === 'done') done += 1;
+      if (it.status === 'error') error += 1;
+    }
+    return { idle, uploadingCount, done, error };
+  }, [items]);
 
   const commonTagSuggestions = useMemo(() => {
     return allTags.slice(0, 12).map((t) => t.name);
@@ -251,6 +296,12 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
         <div className="text-xs sm:text-sm text-neutral-400">
           {items.length > 0 && `${items.length}개`}
         </div>
+        {items.length > 0 && (
+          <div className="hidden sm:block text-[11px] text-neutral-500">
+            대기 {uploadStats.idle} / 업로드중 {uploadStats.uploadingCount} / 완료{' '}
+            {uploadStats.done} / 실패 {uploadStats.error}
+          </div>
+        )}
         <div className="flex-1" />
         <button
           onClick={onClose}
@@ -527,6 +578,10 @@ function ItemCard({
         'relative rounded-xl overflow-hidden border ' +
         (item.selected ? 'border-blue-400' : 'border-transparent')
       }
+      style={{
+        contentVisibility: 'auto',
+        containIntrinsicSize: '240px 300px',
+      }}
     >
       <div className="relative aspect-square bg-neutral-900">
         {item.file.type.startsWith('video/') ? (
@@ -535,7 +590,7 @@ function ItemCard({
               src={item.previewUrl}
               muted
               playsInline
-              preload="metadata"
+              preload="none"
               className={
                 'w-full h-full object-cover ' +
                 (item.blurred ? 'blur-2xl scale-110' : '')
@@ -551,6 +606,8 @@ function ItemCard({
           <img
             src={item.previewUrl}
             alt={item.file.name}
+            loading="lazy"
+            decoding="async"
             className={
               'w-full h-full object-cover ' +
               (item.blurred ? 'blur-2xl scale-110' : '')
@@ -670,4 +727,35 @@ function formatSize(n: number) {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)}KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)}MB`;
   return `${(n / 1024 ** 3).toFixed(2)}GB`;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function pickUploadConcurrency(queue: Item[]): number {
+  let concurrency = DEFAULT_CONCURRENCY;
+  if (queue.length >= 120) concurrency = 6;
+  else if (queue.length >= 60) concurrency = 5;
+  else if (queue.length >= 20) concurrency = 4;
+
+  const hasHugeFile = queue.some((it) => it.file.size > 250 * 1024 * 1024);
+  if (hasHugeFile) concurrency = Math.min(concurrency, 2);
+
+  if (typeof navigator !== 'undefined') {
+    const ua = navigator.userAgent || '';
+    if (/Android|iPhone|iPad|Mobile/i.test(ua)) {
+      concurrency = Math.min(concurrency, 3);
+    }
+    const connectionType = (navigator as any).connection?.effectiveType as
+      | string
+      | undefined;
+    if (connectionType === 'slow-2g' || connectionType === '2g') {
+      concurrency = 2;
+    } else if (connectionType === '3g') {
+      concurrency = Math.min(concurrency, 3);
+    }
+  }
+
+  return Math.max(2, Math.min(MAX_CONCURRENCY, concurrency));
 }

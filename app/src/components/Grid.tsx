@@ -45,6 +45,12 @@ export default function Grid({
               onOpen(i);
             }}
             className="relative aspect-square overflow-hidden bg-neutral-900 group"
+            style={{
+              // Large galleries keep many tiles in the DOM; this lets the
+              // browser skip work for off-screen cells.
+              contentVisibility: 'auto',
+              containIntrinsicSize: '240px 240px',
+            }}
           >
             {showVideoPreview ? (
               // Use the original file with a #t fragment so the browser paints

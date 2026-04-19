@@ -33,8 +33,10 @@ model Photo {
 
   @@index([createdAt])
   @@index([sizeBytes])
+  @@index([filename])
   @@index([takenAt])
   @@index([sourceCreatedAt])
+  @@index([sourceCreatedAt, createdAt, id])
   @@index([sourceModifiedAt])
 }
 
@@ -52,6 +54,7 @@ model TagOnPhoto {
 
   @@id([photoId, tagId])
   @@index([tagId])
+  @@index([tagId, photoId])
 }
 
 model PhotoView {
@@ -62,5 +65,6 @@ model PhotoView {
 
   @@id([photoId, viewerName])
   @@index([viewerName])
+  @@index([viewerName, photoId])
   @@index([viewedAt])
 }

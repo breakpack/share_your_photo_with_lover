@@ -4,6 +4,33 @@ set -e
 echo "[entrypoint] running prisma db push..."
 npx --no-install prisma db push --skip-generate --accept-data-loss=false
 
+echo "[entrypoint] ensuring source-created sort index..."
+if ! node <<'NODE'
+const { PrismaClient } = require('@prisma/client');
+
+const prisma = new PrismaClient();
+
+async function main() {
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "Photo_source_created_sort_idx"
+    ON "Photo" ((COALESCE("sourceCreatedAt", "createdAt")) DESC, "createdAt" DESC, id DESC)
+  `);
+  console.log('[index] ensured Photo_source_created_sort_idx');
+}
+
+main()
+  .catch((err) => {
+    console.error('[index] failed', err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect().catch(() => {});
+  });
+NODE
+then
+  echo "[entrypoint] source-created sort index ensure failed; continuing startup"
+fi
+
 echo "[entrypoint] backfilling duplicate-filename tag..."
 if ! node <<'NODE'
 const { PrismaClient } = require('@prisma/client');

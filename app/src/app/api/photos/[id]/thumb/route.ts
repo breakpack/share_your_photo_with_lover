@@ -10,13 +10,27 @@ import { generateThumbnail } from '@/lib/image-metadata';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const NO_STORE = 'private, no-store, max-age=0, must-revalidate';
+
+function secureHeaders(init?: HeadersInit) {
+  const headers = new Headers(init);
+  headers.set('cache-control', NO_STORE);
+  headers.set('pragma', 'no-cache');
+  headers.set('expires', '0');
+  headers.set('x-content-type-options', 'nosniff');
+  headers.set('cross-origin-resource-policy', 'same-origin');
+  const vary = headers.get('vary');
+  if (!vary) headers.set('vary', 'Cookie');
+  else if (!vary.toLowerCase().includes('cookie')) headers.set('vary', `${vary}, Cookie`);
+  return headers;
+}
 
 export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   const user = getCurrentUser();
-  if (!user) return new Response('unauthorized', { status: 401 });
+  if (!user) return new Response('unauthorized', { status: 401, headers: secureHeaders() });
 
   const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
-  if (!photo) return new Response('not found', { status: 404 });
+  if (!photo) return new Response('not found', { status: 404, headers: secureHeaders() });
 
   const file = thumbPath(photo.id);
   let stat;
@@ -24,14 +38,14 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
     stat = await fs.stat(file);
   } catch {
     if (!photo.mimeType.startsWith('image/')) {
-      return new Response('missing file', { status: 404 });
+      return new Response('missing file', { status: 404, headers: secureHeaders() });
     }
     try {
       await generateThumbnail(originalPath(photo.id), file, photo.mimeType);
       stat = await fs.stat(file);
     } catch (err) {
       console.error('thumb lazy-generate failed', err);
-      return new Response('missing file', { status: 404 });
+      return new Response('missing file', { status: 404, headers: secureHeaders() });
     }
   }
 
@@ -43,15 +57,14 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
         .toBuffer();
       const body = Uint8Array.from(masked);
       return new Response(body, {
-        headers: {
+        headers: secureHeaders({
           'content-type': 'image/jpeg',
           'content-length': String(masked.length),
-          'cache-control': 'private, no-store',
-        },
+        }),
       });
     } catch (err) {
       console.error('hidden thumb blur failed', err);
-      return new Response('thumbnail processing failed', { status: 500 });
+      return new Response('thumbnail processing failed', { status: 500, headers: secureHeaders() });
     }
   }
 
@@ -59,10 +72,9 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
 
   return new Response(webStream, {
-    headers: {
+    headers: secureHeaders({
       'content-type': 'image/jpeg',
       'content-length': String(stat.size),
-      'cache-control': 'private, max-age=31536000, immutable',
-    },
+    }),
   });
 }

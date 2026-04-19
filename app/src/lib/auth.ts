@@ -3,6 +3,14 @@ import crypto from 'node:crypto';
 
 const COOKIE_NAME = 'photoshare_session';
 const SEVEN_DAYS = 60 * 60 * 24 * 7;
+const SESSION_VERSION = 1;
+
+type SessionPayloadV1 = {
+  v: number;
+  u: string;
+  iat: number;
+  exp: number;
+};
 
 export type Account = { name: string; password: string };
 
@@ -41,6 +49,32 @@ function verify(signed: string): string | null {
   return value;
 }
 
+function shouldUseSecureCookie() {
+  const env = process.env.COOKIE_SECURE;
+  if (env === '1') return true;
+  if (env === '0') return false;
+  return process.env.NODE_ENV === 'production';
+}
+
+function encodeSessionPayload(payload: SessionPayloadV1): string {
+  return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeSessionPayload(raw: string): SessionPayloadV1 | null {
+  try {
+    const decoded = Buffer.from(raw, 'base64url').toString('utf8');
+    const p = JSON.parse(decoded) as Partial<SessionPayloadV1>;
+    if (p.v !== SESSION_VERSION) return null;
+    if (typeof p.u !== 'string' || !p.u) return null;
+    if (typeof p.iat !== 'number' || typeof p.exp !== 'number') return null;
+    if (!Number.isFinite(p.iat) || !Number.isFinite(p.exp)) return null;
+    if (p.exp <= Date.now()) return null;
+    return { v: p.v, u: p.u, iat: p.iat, exp: p.exp };
+  } catch {
+    return null;
+  }
+}
+
 export function authenticate(name: string, password: string): boolean {
   const acc = getConfiguredAccounts().find((a) => a.name === name);
   if (!acc) return false;
@@ -51,14 +85,21 @@ export function authenticate(name: string, password: string): boolean {
 }
 
 export function createSession(name: string) {
-  cookies().set(COOKIE_NAME, sign(name), {
+  const now = Date.now();
+  const payload: SessionPayloadV1 = {
+    v: SESSION_VERSION,
+    u: name,
+    iat: now,
+    exp: now + SEVEN_DAYS * 1000,
+  };
+
+  cookies().set(COOKIE_NAME, sign(encodeSessionPayload(payload)), {
     httpOnly: true,
-    sameSite: 'lax',
+    sameSite: 'strict',
     path: '/',
     maxAge: SEVEN_DAYS,
-    // Only mark cookie Secure when the site is actually served over HTTPS.
-    // Set COOKIE_SECURE=1 when behind an HTTPS-terminating reverse proxy.
-    secure: process.env.COOKIE_SECURE === '1',
+    secure: shouldUseSecureCookie(),
+    priority: 'high',
   });
 }
 
@@ -69,9 +110,14 @@ export function destroySession() {
 export function getCurrentUser(): string | null {
   const c = cookies().get(COOKIE_NAME);
   if (!c) return null;
-  const name = verify(c.value);
-  if (!name) return null;
+
+  const raw = verify(c.value);
+  if (!raw) return null;
+
+  // v1 payload (base64url json) + legacy fallback (plain username)
+  const payload = decodeSessionPayload(raw);
+  const name = payload?.u ?? raw;
+
   if (!getConfiguredAccounts().some((a) => a.name === name)) return null;
   return name;
 }
-
