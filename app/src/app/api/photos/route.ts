@@ -15,7 +15,7 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
-  const sort = url.searchParams.get('sort') || 'time-desc';
+  const sort = url.searchParams.get('sort') || 'taken-desc';
   const tagParam = url.searchParams.get('tags') || '';
   const tagNames = tagParam.split(',').map((s) => s.trim()).filter(Boolean);
 

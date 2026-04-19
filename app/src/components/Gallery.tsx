@@ -18,7 +18,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
 
   const [allTags, setAllTags] = useState<TagSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [sort, setSort] = useState<SortKey>('time-desc');
+  const [sort, setSort] = useState<SortKey>('taken-desc');
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [uploaderOpen, setUploaderOpen] = useState(false);
   const [dragHover, setDragHover] = useState(false);
