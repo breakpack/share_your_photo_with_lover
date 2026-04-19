@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
-import { Readable } from 'node:stream';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { originalPath } from '@/lib/storage';
 import { convertHeicToJpegBuffer, isHeicMime } from '@/lib/heic';
+import { toWebReadableSafe } from '@/lib/stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,7 +82,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
         });
       }
       const nodeStream = createReadStream(file, { start, end });
-      const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
+      const webStream = toWebReadableSafe(nodeStream);
       return new Response(webStream, {
         status: 206,
         headers: secureHeaders({
@@ -96,7 +96,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 
   const nodeStream = createReadStream(file);
-  const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
+  const webStream = toWebReadableSafe(nodeStream);
 
   return new Response(webStream, {
     headers: secureHeaders({

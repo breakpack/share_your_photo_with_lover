@@ -19,6 +19,17 @@ export default function LoginPage() {
         body: JSON.stringify({ name, password }),
       });
       if (!res.ok) {
+        if (res.status === 429) {
+          const body = await res.json().catch(() => null);
+          const retryAfterSec =
+            typeof body?.retryAfterSec === 'number' ? Math.max(1, Math.floor(body.retryAfterSec)) : null;
+          setError(
+            retryAfterSec
+              ? `로그인 시도 제한: ${retryAfterSec}초 후 다시 시도하세요.`
+              : '로그인 시도 제한: 잠시 후 다시 시도하세요.',
+          );
+          return;
+        }
         setError('이름 또는 비밀번호가 올바르지 않습니다.');
         return;
       }

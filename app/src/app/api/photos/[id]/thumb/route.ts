@@ -1,12 +1,12 @@
 import { NextRequest } from 'next/server';
 import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
-import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { originalPath, thumbPath } from '@/lib/storage';
 import { generateThumbnail } from '@/lib/image-metadata';
+import { toWebReadableSafe } from '@/lib/stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,7 +69,7 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   }
 
   const nodeStream = createReadStream(file);
-  const webStream = Readable.toWeb(nodeStream) as unknown as ReadableStream;
+  const webStream = toWebReadableSafe(nodeStream);
 
   return new Response(webStream, {
     headers: secureHeaders({
