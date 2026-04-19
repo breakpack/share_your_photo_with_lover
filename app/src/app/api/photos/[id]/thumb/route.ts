@@ -5,7 +5,8 @@ import { Readable } from 'node:stream';
 import sharp from 'sharp';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
-import { thumbPath } from '@/lib/storage';
+import { originalPath, thumbPath } from '@/lib/storage';
+import { generateThumbnail } from '@/lib/image-metadata';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,7 +23,16 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   try {
     stat = await fs.stat(file);
   } catch {
-    return new Response('missing file', { status: 404 });
+    if (!photo.mimeType.startsWith('image/')) {
+      return new Response('missing file', { status: 404 });
+    }
+    try {
+      await generateThumbnail(originalPath(photo.id), file, photo.mimeType);
+      stat = await fs.stat(file);
+    } catch (err) {
+      console.error('thumb lazy-generate failed', err);
+      return new Response('missing file', { status: 404 });
+    }
   }
 
   if (photo.hidden) {

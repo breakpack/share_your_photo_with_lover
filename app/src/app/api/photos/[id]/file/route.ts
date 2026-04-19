@@ -5,6 +5,7 @@ import { Readable } from 'node:stream';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { originalPath } from '@/lib/storage';
+import { convertHeicToJpegBuffer, isHeicMime } from '@/lib/heic';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,6 +26,24 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     stat = await fs.stat(file);
   } catch {
     return new Response('missing file', { status: 404 });
+  }
+
+  if (isHeicMime(photo.mimeType)) {
+    try {
+      const raw = await fs.readFile(file);
+      const jpeg = await convertHeicToJpegBuffer(raw, 0.92);
+      const body = Uint8Array.from(jpeg);
+      return new Response(body, {
+        headers: {
+          'content-type': 'image/jpeg',
+          'content-length': String(body.length),
+          'cache-control': 'private, max-age=31536000, immutable',
+        },
+      });
+    } catch (err) {
+      console.error('heic file transcode failed', err);
+      return new Response('file decoding failed', { status: 500 });
+    }
   }
 
   const size = stat.size;

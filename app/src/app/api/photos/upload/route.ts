@@ -75,7 +75,7 @@ export async function POST(req: NextRequest) {
     const imageMeta = isImage ? await extractImageMetadata(dest) : emptyImageMetadata();
     if (isImage) {
       try {
-        await generateThumbnail(dest, thumbPath(photo.id));
+        await generateThumbnail(dest, thumbPath(photo.id), mimeType);
       } catch (err) {
         console.error('thumbnail failed', err);
       }

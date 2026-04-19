@@ -30,7 +30,7 @@ export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
   const parsed = await extractImageMetadata(src);
 
   try {
-    await generateThumbnail(src, thumbPath(photo.id));
+    await generateThumbnail(src, thumbPath(photo.id), photo.mimeType);
   } catch (err) {
     console.error('thumbnail reparse failed', err);
   }

@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import sharp from 'sharp';
 import exifr from 'exifr';
+import { convertHeicToJpegBuffer, isHeicMime } from '@/lib/heic';
 
 export type ParsedImageMetadata = {
   width: number | null;
@@ -32,8 +33,26 @@ export function emptyImageMetadata(): ParsedImageMetadata {
   };
 }
 
-export async function generateThumbnail(inputPath: string, outputPath: string) {
-  await sharp(inputPath, { failOn: 'none' })
+export async function generateThumbnail(
+  inputPath: string,
+  outputPath: string,
+  mimeType?: string,
+) {
+  try {
+    await sharp(inputPath, { failOn: 'none' })
+      .rotate()
+      .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toFile(outputPath);
+    return;
+  } catch (err) {
+    if (!isHeicMime(mimeType)) throw err;
+  }
+
+  // HEIC fallback for environments where sharp cannot decode the HEVC payload.
+  const raw = await fs.readFile(inputPath);
+  const jpeg = await convertHeicToJpegBuffer(raw, 0.9);
+  await sharp(jpeg, { failOn: 'none' })
     .rotate()
     .resize({ width: 600, height: 600, fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 80, mozjpeg: true })
@@ -94,9 +113,23 @@ async function parseExifData(path: string, embeddedExif: Buffer | null): Promise
   if (embeddedExif && embeddedExif.length > 0) {
     const fromEmbedded = await tryParseExif(embeddedExif);
     if (fromEmbedded) return fromEmbedded;
+
+    // sharp metadata() often returns EXIF payload prefixed with "Exif\0\0".
+    // exifr expects TIFF bytes ("MM"/"II") for raw EXIF buffers.
+    const maybeTiff = extractTiffFromEmbeddedExif(embeddedExif);
+    if (maybeTiff) {
+      const fromEmbeddedTiff = await tryParseExif(maybeTiff);
+      if (fromEmbeddedTiff) return fromEmbeddedTiff;
+    }
   }
 
   return null;
+}
+
+function extractTiffFromEmbeddedExif(exif: Buffer): Buffer | null {
+  if (exif.length <= 6) return null;
+  if (exif.subarray(0, 6).toString('ascii') !== 'Exif\u0000\u0000') return null;
+  return exif.subarray(6);
 }
 
 async function tryParseExif(input: string | Buffer | Uint8Array): Promise<any | null> {
