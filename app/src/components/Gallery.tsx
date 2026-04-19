@@ -280,6 +280,28 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     [currentUser],
   );
 
+  const reparsePhoto = useCallback(
+    async (photo: Photo, opts?: { silent?: boolean }) => {
+      if (!photo.mimeType.startsWith('image/')) return true;
+      const res = await fetch(`/api/photos/${photo.id}/reparse`, { method: 'POST' });
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return false;
+      }
+      if (!res.ok) {
+        if (!opts?.silent) {
+          const message = await res.text().catch(() => '');
+          console.error('reparse failed', message || `HTTP ${res.status}`);
+        }
+        return false;
+      }
+      const updated = await res.json();
+      setPhotos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      return true;
+    },
+    [],
+  );
+
   async function deletePhoto(photo: Photo) {
     if (photo.ownerName !== currentUser) return;
     if (!confirm(`삭제할까요? "${photo.filename}"`)) return;
@@ -364,6 +386,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
           onUpdateCaption={(c) => updateCaption(photos[lightboxIndex], c)}
           onUpdateTags={(tags) => updateTags(photos[lightboxIndex], tags)}
           onViewed={markViewed}
+          onReparse={reparsePhoto}
           onDelete={() => deletePhoto(photos[lightboxIndex])}
           allTags={allTags}
         />

@@ -16,6 +16,7 @@ type Props = {
   onUpdateCaption: (caption: string) => void;
   onUpdateTags: (tags: string[]) => void;
   onViewed: (photo: Photo) => void;
+  onReparse: (photo: Photo, opts?: { silent?: boolean }) => Promise<boolean>;
   onDelete: () => void;
   allTags: TagSummary[];
 };
@@ -33,6 +34,7 @@ export default function Lightbox({
   onUpdateCaption,
   onUpdateTags,
   onViewed,
+  onReparse,
   onDelete,
   allTags,
 }: Props) {
@@ -40,6 +42,8 @@ export default function Lightbox({
   const [tagInput, setTagInput] = useState('');
   const [captionDraft, setCaptionDraft] = useState(photo.caption ?? '');
   const [captionEditing, setCaptionEditing] = useState(false);
+  const [reparsing, setReparsing] = useState(false);
+  const [reparseError, setReparseError] = useState<string | null>(null);
 
   useEffect(() => {
     setCaptionDraft(photo.caption ?? '');
@@ -67,6 +71,16 @@ export default function Lightbox({
     if (!isOwner && photo.unseen) onViewed(photo);
   }, [isOwner, onViewed, photo]);
 
+  useEffect(() => {
+    setReparsing(false);
+    setReparseError(null);
+  }, [photo.id]);
+
+  useEffect(() => {
+    if (!photo.mimeType.startsWith('image/')) return;
+    void onReparse(photo, { silent: true });
+  }, [onReparse, photo.id, photo.mimeType]);
+
   function addTag(name: string) {
     const t = name.trim();
     if (!t || tagNames.includes(t)) return;
@@ -80,6 +94,15 @@ export default function Lightbox({
   function saveCaption() {
     onUpdateCaption(captionDraft);
     setCaptionEditing(false);
+  }
+
+  async function reparseNow() {
+    if (reparsing || !photo.mimeType.startsWith('image/')) return;
+    setReparsing(true);
+    setReparseError(null);
+    const ok = await onReparse(photo, { silent: false });
+    if (!ok) setReparseError('정보 재파싱에 실패했습니다.');
+    setReparsing(false);
   }
 
   return (
@@ -287,7 +310,21 @@ export default function Lightbox({
           </section>
 
           <section>
-            <div className="text-neutral-500 mb-1">메타데이터</div>
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className="text-neutral-500">메타데이터</div>
+              {photo.mimeType.startsWith('image/') && (
+                <button
+                  onClick={reparseNow}
+                  disabled={reparsing}
+                  className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed rounded px-2 py-1 text-[11px] sm:text-xs"
+                >
+                  {reparsing ? '재파싱 중...' : '정보 재파싱'}
+                </button>
+              )}
+            </div>
+            {reparseError && (
+              <div className="mb-1 text-[11px] text-red-300">{reparseError}</div>
+            )}
             <div className="space-y-1.5 bg-neutral-900 rounded p-2">
               <Row label="파일명" value={photo.filename} break />
               <Row label="파일 형식" value={formatFileType(photo.mimeType)} />
