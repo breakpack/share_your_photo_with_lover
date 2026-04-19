@@ -8,6 +8,10 @@ type Props = {
   tags: TagSummary[];
   selectedTags: string[];
   onSelectedTagsChange: (tags: string[]) => void;
+  selectionMode: boolean;
+  selectedPhotoCount: number;
+  bulkBusy: boolean;
+  onToggleSelectionMode: () => void;
   sort: SortKey;
   onSortChange: (s: SortKey) => void;
   columns: number;
@@ -26,6 +30,10 @@ export default function Toolbar({
   tags,
   selectedTags,
   onSelectedTagsChange,
+  selectionMode,
+  selectedPhotoCount,
+  bulkBusy,
+  onToggleSelectionMode,
   sort,
   onSortChange,
   columns,
@@ -147,6 +155,19 @@ export default function Toolbar({
           <option value="size-desc">큰 크기순</option>
           <option value="size-asc">작은 크기순</option>
         </select>
+
+        <button
+          onClick={onToggleSelectionMode}
+          disabled={bulkBusy}
+          className={
+            'bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-lg px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm shrink-0 ' +
+            (selectionMode ? 'ring-1 ring-blue-400 text-blue-200' : '')
+          }
+          aria-label={selectionMode ? '선택 모드 종료' : '선택 모드 시작'}
+          title={selectionMode ? '선택 모드 종료' : '선택 모드 시작'}
+        >
+          {selectionMode ? `선택중 ${selectedPhotoCount}` : '선택'}
+        </button>
 
         <button
           onClick={onRefreshClick}

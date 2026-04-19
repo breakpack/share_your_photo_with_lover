@@ -19,6 +19,9 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   const [allTags, setAllTags] = useState<TagSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [sort, setSort] = useState<SortKey>('taken-desc');
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [uploaderOpen, setUploaderOpen] = useState(false);
   const [dragHover, setDragHover] = useState(false);
@@ -39,10 +42,24 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
   // changes). Each fetch captures requestSeq.current; on completion it only
   // commits if still the latest.
   const requestSeq = useRef(0);
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedPhotos = useMemo(
+    () => photos.filter((p) => selectedIdSet.has(p.id)),
+    [photos, selectedIdSet],
+  );
 
   useEffect(() => {
     window.localStorage.setItem('photoshare.columns', String(columns));
   }, [columns]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.length === 0) return prev;
+      const valid = new Set(photos.map((p) => p.id));
+      const next = prev.filter((id) => valid.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [photos]);
 
   const refreshTags = useCallback(async () => {
     const res = await fetch('/api/tags');
@@ -204,12 +221,13 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
 
   const openLightbox = useCallback(
     (index: number) => {
+      if (selectionMode) return;
       if (lightboxIndex == null) {
         window.history.pushState({ photoshareLightbox: true }, '', window.location.href);
       }
       setLightboxIndex(index);
     },
-    [lightboxIndex],
+    [lightboxIndex, selectionMode],
   );
 
   const closeLightbox = useCallback(() => {
@@ -234,16 +252,111 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     [photos.length, hasMore, loadingMore, loadMore],
   );
 
-  async function patchPhoto(photo: Photo, patch: any, refetchTags = false) {
-    const res = await fetch(`/api/photos/${photo.id}`, {
+  function toggleSelectionMode() {
+    if (!selectionMode && lightboxIndex != null) closeLightbox();
+    setSelectionMode((v) => {
+      if (v) setSelectedIds([]);
+      return !v;
+    });
+  }
+
+  function toggleSelect(photoId: string) {
+    setSelectedIds((prev) =>
+      prev.includes(photoId)
+        ? prev.filter((id) => id !== photoId)
+        : [...prev, photoId],
+    );
+  }
+
+  function selectAllVisible() {
+    setSelectedIds(photos.map((p) => p.id));
+  }
+
+  function clearSelection() {
+    setSelectedIds([]);
+  }
+
+  async function patchPhotoById(photoId: string, patch: any) {
+    const res = await fetch(`/api/photos/${photoId}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(patch),
     });
-    if (res.ok) {
-      const updated = await res.json();
+    if (res.status === 401) {
+      window.location.href = '/login';
+      return null;
+    }
+    if (!res.ok) return null;
+    return (await res.json()) as Photo;
+  }
+
+  async function patchPhoto(photo: Photo, patch: any, refetchTags = false) {
+    const updated = await patchPhotoById(photo.id, patch);
+    if (updated) {
       setPhotos((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
       if (refetchTags) refreshTags();
+    }
+  }
+
+  async function bulkUpdateSelected(patch: { hidden?: boolean; blurred?: boolean }) {
+    if (bulkBusy || selectedPhotos.length === 0) return;
+    const targets = selectedPhotos.filter((p) => {
+      if ('hidden' in patch) return p.ownerName === currentUser;
+      if ('blurred' in patch) return !p.hidden;
+      return true;
+    });
+    if (targets.length === 0) return;
+
+    setBulkBusy(true);
+    try {
+      const updated = (
+        await Promise.all(targets.map((p) => patchPhotoById(p.id, patch)))
+      ).filter((p): p is Photo => Boolean(p));
+      if (updated.length) {
+        const byId = new Map(updated.map((p) => [p.id, p]));
+        setPhotos((prev) => prev.map((p) => byId.get(p.id) ?? p));
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkDeleteSelected() {
+    if (bulkBusy || selectedPhotos.length === 0) return;
+    const targets = selectedPhotos.filter((p) => p.ownerName === currentUser);
+    if (targets.length === 0) return;
+    if (!confirm(`선택한 ${targets.length}개 사진을 삭제할까요?`)) return;
+
+    setBulkBusy(true);
+    try {
+      const deletedIds = (
+        await Promise.all(
+          targets.map(async (p) => {
+            const res = await fetch(`/api/photos/${p.id}`, { method: 'DELETE' });
+            if (res.status === 401) {
+              window.location.href = '/login';
+              return null;
+            }
+            return res.ok ? p.id : null;
+          }),
+        )
+      ).filter((id): id is string => Boolean(id));
+
+      if (deletedIds.length) {
+        const deletedSet = new Set(deletedIds);
+        setPhotos((prev) => prev.filter((p) => !deletedSet.has(p.id)));
+        setSelectedIds((prev) => prev.filter((id) => !deletedSet.has(id)));
+        setNextOffset((n) => Math.max(0, n - deletedIds.length));
+        setLightboxIndex((idx) => {
+          if (idx == null) return idx;
+          const opened = photos[idx];
+          if (!opened) return idx;
+          return deletedSet.has(opened.id) ? null : idx;
+        });
+        refreshTags();
+      }
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -329,6 +442,10 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         tags={tagsWithAll}
         selectedTags={selectedTags}
         onSelectedTagsChange={setSelectedTags}
+        selectionMode={selectionMode}
+        selectedPhotoCount={selectedIds.length}
+        bulkBusy={bulkBusy}
+        onToggleSelectionMode={toggleSelectionMode}
         sort={sort}
         onSortChange={setSort}
         columns={columns}
@@ -342,7 +459,69 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         onLogout={logout}
       />
 
-      <main className="pt-14">
+      {selectionMode && (
+        <div className="fixed top-14 inset-x-0 z-20 border-b border-neutral-800 bg-neutral-950/95 backdrop-blur px-2 sm:px-3 py-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar">
+            <div className="text-xs text-neutral-300 shrink-0 min-w-fit pr-1">
+              선택 {selectedIds.length}개
+            </div>
+            <button
+              onClick={selectAllVisible}
+              disabled={bulkBusy}
+              className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+            >
+              전체선택
+            </button>
+            <button
+              onClick={clearSelection}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+            >
+              선택해제
+            </button>
+            <button
+              onClick={() => bulkUpdateSelected({ hidden: true })}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-amber-600/30 hover:bg-amber-600/40 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+              title="내가 올린 사진만 적용"
+            >
+              가리기
+            </button>
+            <button
+              onClick={() => bulkUpdateSelected({ hidden: false })}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-amber-600/20 hover:bg-amber-600/30 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+              title="내가 올린 사진만 적용"
+            >
+              가리기 해제
+            </button>
+            <button
+              onClick={() => bulkUpdateSelected({ blurred: true })}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-purple-600/30 hover:bg-purple-600/40 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+            >
+              블러
+            </button>
+            <button
+              onClick={() => bulkUpdateSelected({ blurred: false })}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-purple-600/20 hover:bg-purple-600/30 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+            >
+              블러 해제
+            </button>
+            <button
+              onClick={bulkDeleteSelected}
+              disabled={bulkBusy || selectedIds.length === 0}
+              className="bg-red-600/30 hover:bg-red-600/40 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+              title="내가 올린 사진만 삭제"
+            >
+              삭제
+            </button>
+          </div>
+        </div>
+      )}
+
+      <main className={selectionMode ? 'pt-[6.5rem]' : 'pt-14'}>
         {loading ? (
           <div className="p-8 text-neutral-400">로딩중...</div>
         ) : photos.length === 0 ? (
@@ -355,6 +534,9 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
               photos={photos}
               currentUser={currentUser}
               columns={columns}
+              selectionMode={selectionMode}
+              selectedIds={selectedIdSet}
+              onToggleSelect={toggleSelect}
               onOpen={openLightbox}
             />
             <div ref={sentinelRef} className="h-8" />
@@ -372,7 +554,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         )}
       </main>
 
-      {lightboxIndex != null && photos[lightboxIndex] && (
+      {!selectionMode && lightboxIndex != null && photos[lightboxIndex] && (
         <Lightbox
           photo={photos[lightboxIndex]}
           currentUser={currentUser}

@@ -6,10 +6,21 @@ type Props = {
   photos: Photo[];
   currentUser: string;
   columns: number;
+  selectionMode: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (photoId: string) => void;
   onOpen: (index: number) => void;
 };
 
-export default function Grid({ photos, currentUser, columns, onOpen }: Props) {
+export default function Grid({
+  photos,
+  currentUser,
+  columns,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
+  onOpen,
+}: Props) {
   const cols = Math.max(1, Math.min(20, columns));
   return (
     <div
@@ -26,7 +37,13 @@ export default function Grid({ photos, currentUser, columns, onOpen }: Props) {
         return (
           <button
             key={p.id}
-            onClick={() => onOpen(i)}
+            onClick={() => {
+              if (selectionMode) {
+                onToggleSelect(p.id);
+                return;
+              }
+              onOpen(i);
+            }}
             className="relative aspect-square overflow-hidden bg-neutral-900 group"
           >
             {showVideoPreview ? (
@@ -84,6 +101,20 @@ export default function Grid({ photos, currentUser, columns, onOpen }: Props) {
             {p.ownerName !== currentUser && (
               <div className="absolute bottom-1 left-1 bg-black/60 rounded-full px-1.5 py-0.5 text-[10px]">
                 {p.ownerName}
+              </div>
+            )}
+            {selectionMode && (
+              <div className="absolute top-1.5 left-1.5 pointer-events-none">
+                <div
+                  className={
+                    'w-5 h-5 rounded border flex items-center justify-center text-xs font-bold ' +
+                    (selectedIds.has(p.id)
+                      ? 'bg-blue-500 border-blue-300 text-white'
+                      : 'bg-black/50 border-white/60 text-transparent')
+                  }
+                >
+                  ✓
+                </div>
               </div>
             )}
           </button>
