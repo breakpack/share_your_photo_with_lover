@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import sharp from 'sharp';
 import exifr from 'exifr';
 
@@ -41,25 +42,18 @@ export async function generateThumbnail(inputPath: string, outputPath: string) {
 
 export async function extractImageMetadata(path: string): Promise<ParsedImageMetadata> {
   const out = emptyImageMetadata();
+  let sharpMeta: sharp.Metadata | null = null;
 
   try {
-    const meta = await sharp(path, { failOn: 'none' }).metadata();
-    out.width = meta.width ?? null;
-    out.height = meta.height ?? null;
+    sharpMeta = await sharp(path, { failOn: 'none' }).metadata();
+    out.width = sharpMeta.width ?? null;
+    out.height = sharpMeta.height ?? null;
   } catch {
     // keep null width/height
   }
 
-  try {
-    const data = await exifr.parse(path, {
-      gps: true,
-      tiff: true,
-      exif: true,
-      iptc: true,
-      xmp: true,
-    });
-    if (!data) return out;
-
+  const data = await parseExifData(path, sharpMeta?.exif ? Buffer.from(sharpMeta.exif) : null);
+  if (data) {
     out.sourceCreatedAt = pickDate(data, [
       'DateTimeOriginal',
       'SubSecDateTimeOriginal',
@@ -88,11 +82,62 @@ export async function extractImageMetadata(path: string): Promise<ParsedImageMet
     out.cameraModel = str(data.Model);
     out.artist = str(data.Artist) || str(data.Creator) || str(data.Byline);
     out.raw = sanitize(data);
-  } catch {
-    // keep fallback metadata
   }
 
+  // Fallback: if EXIF container dates are absent, use filesystem timestamps.
+  // This guarantees "정보 재파싱" after legacy uploads can still fill dates.
+  try {
+    const stat = await fs.stat(path);
+    out.sourceCreatedAt =
+      out.sourceCreatedAt ??
+      asDate(stat.birthtime) ??
+      asDate(stat.ctime);
+    out.sourceModifiedAt = out.sourceModifiedAt ?? asDate(stat.mtime);
+  } catch {
+    // ignore stat fallback failure
+  }
+
+  out.takenAt = out.takenAt ?? out.sourceCreatedAt ?? out.sourceModifiedAt;
+
   return out;
+}
+
+const EXIFR_OPTS = {
+  gps: true,
+  tiff: true,
+  exif: true,
+  iptc: true,
+  xmp: true,
+} as const;
+
+async function parseExifData(path: string, embeddedExif: Buffer | null): Promise<any | null> {
+  const fromPath = await tryParseExif(path);
+  if (fromPath) return fromPath;
+
+  // Some files are stored without extension (id-only filename). For HEIC/HEIF
+  // this can make path-based detection miss. Buffer parse is more robust.
+  try {
+    const file = await fs.readFile(path);
+    const fromBuffer = await tryParseExif(file);
+    if (fromBuffer) return fromBuffer;
+  } catch {
+    // ignore and continue
+  }
+
+  if (embeddedExif && embeddedExif.length > 0) {
+    const fromEmbedded = await tryParseExif(embeddedExif);
+    if (fromEmbedded) return fromEmbedded;
+  }
+
+  return null;
+}
+
+async function tryParseExif(input: string | Buffer | Uint8Array): Promise<any | null> {
+  try {
+    return await exifr.parse(input as any, EXIFR_OPTS);
+  } catch {
+    return null;
+  }
 }
 
 function pickDate(data: any, keys: string[]): Date | null {
