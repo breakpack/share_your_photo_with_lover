@@ -104,6 +104,8 @@ export async function POST(req: NextRequest) {
         width,
         height,
         takenAt: exif.takenAt,
+        sourceCreatedAt: exif.sourceCreatedAt,
+        sourceModifiedAt: exif.sourceModifiedAt,
         gpsLat: exif.gpsLat,
         gpsLng: exif.gpsLng,
         cameraMake: exif.cameraMake,
@@ -130,6 +132,8 @@ export async function POST(req: NextRequest) {
 
 type ParsedExif = {
   takenAt: Date | null;
+  sourceCreatedAt: Date | null;
+  sourceModifiedAt: Date | null;
   gpsLat: number | null;
   gpsLng: number | null;
   cameraMake: string | null;
@@ -148,9 +152,26 @@ async function parseExif(path: string): Promise<ParsedExif> {
       xmp: true,
     });
     if (!data) return empty();
-    const takenAtRaw =
-      data.DateTimeOriginal || data.CreateDate || data.ModifyDate || null;
-    const takenAt = takenAtRaw instanceof Date ? takenAtRaw : null;
+    const sourceCreatedAt = pickDate(data, [
+      'DateTimeOriginal',
+      'SubSecDateTimeOriginal',
+      'CreateDate',
+      'SubSecCreateDate',
+      'CreationDate',
+      'DateCreated',
+      'ContentCreateDate',
+      'MediaCreateDate',
+      'TrackCreateDate',
+    ]);
+    const sourceModifiedAt = pickDate(data, [
+      'ModifyDate',
+      'SubSecModifyDate',
+      'ContentModifyDate',
+      'MediaModifyDate',
+      'TrackModifyDate',
+    ]);
+    const takenAt =
+      pickDate(data, ['DateTimeOriginal']) ?? sourceCreatedAt ?? sourceModifiedAt;
     const gpsLat = typeof data.latitude === 'number' ? data.latitude : null;
     const gpsLng = typeof data.longitude === 'number' ? data.longitude : null;
     const cameraMake = str(data.Make);
@@ -158,6 +179,8 @@ async function parseExif(path: string): Promise<ParsedExif> {
     const artist = str(data.Artist) || str(data.Creator) || str(data.Byline);
     return {
       takenAt,
+      sourceCreatedAt,
+      sourceModifiedAt,
       gpsLat,
       gpsLng,
       cameraMake,
@@ -173,6 +196,8 @@ async function parseExif(path: string): Promise<ParsedExif> {
 function empty(): ParsedExif {
   return {
     takenAt: null,
+    sourceCreatedAt: null,
+    sourceModifiedAt: null,
     gpsLat: null,
     gpsLng: null,
     cameraMake: null,
@@ -180,6 +205,55 @@ function empty(): ParsedExif {
     artist: null,
     raw: null,
   };
+}
+
+function pickDate(data: any, keys: string[]): Date | null {
+  for (const key of keys) {
+    const d = asDate(data?.[key]);
+    if (d) return d;
+  }
+  return null;
+}
+
+function asDate(v: unknown): Date | null {
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
+  if (typeof v === 'number') {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof v === 'string') {
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d;
+
+    // EXIF-like string: "YYYY:MM:DD HH:mm:ss" (optionally subseconds/tz)
+    const m =
+      /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:\s*(Z|[+\-]\d{2}:?\d{2}))?$/.exec(
+        v.trim(),
+      );
+    if (!m) return null;
+
+    const [, yy, mm, dd, hh, mi, ss, sub = '', tz] = m;
+    const ms = sub ? Number(sub.padEnd(3, '0').slice(0, 3)) : 0;
+    if (tz) {
+      const normTz =
+        tz === 'Z' ? 'Z' : `${tz.slice(0, 3)}:${tz.slice(-2)}`;
+      const iso = `${yy}-${mm}-${dd}T${hh}:${mi}:${ss}.${String(ms).padStart(3, '0')}${normTz}`;
+      const withTz = new Date(iso);
+      return Number.isNaN(withTz.getTime()) ? null : withTz;
+    }
+
+    const local = new Date(
+      Number(yy),
+      Number(mm) - 1,
+      Number(dd),
+      Number(hh),
+      Number(mi),
+      Number(ss),
+      ms,
+    );
+    return Number.isNaN(local.getTime()) ? null : local;
+  }
+  return null;
 }
 
 function str(v: unknown): string | null {

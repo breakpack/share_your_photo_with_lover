@@ -13,6 +13,9 @@ export type Photo = {
   blurred: boolean;
   caption: string | null;
   takenAt: string | null;
+  sourceCreatedAt: string | null;
+  sourceModifiedAt: string | null;
+  lastViewedAt: string | null;
   gpsLat: number | null;
   gpsLng: number | null;
   cameraMake: string | null;

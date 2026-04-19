@@ -290,6 +290,7 @@ export default function Lightbox({
             <div className="text-neutral-500 mb-1">메타데이터</div>
             <div className="space-y-1.5 bg-neutral-900 rounded p-2">
               <Row label="파일명" value={photo.filename} break />
+              <Row label="파일 형식" value={formatFileType(photo.mimeType)} />
               <Row label="파일 크기" value={formatSize(photo.sizeBytes)} />
               {photo.width && photo.height && (
                 <Row label="해상도" value={`${photo.width} × ${photo.height}`} />
@@ -298,6 +299,24 @@ export default function Lightbox({
               <Row label="업로드 시각" value={new Date(photo.createdAt).toLocaleString()} />
               {photo.takenAt && (
                 <Row label="촬영 시각" value={new Date(photo.takenAt).toLocaleString()} />
+              )}
+              {photo.sourceCreatedAt && (
+                <Row
+                  label="원본 생성 시각"
+                  value={new Date(photo.sourceCreatedAt).toLocaleString()}
+                />
+              )}
+              {photo.sourceModifiedAt && (
+                <Row
+                  label="원본 수정 시각"
+                  value={new Date(photo.sourceModifiedAt).toLocaleString()}
+                />
+              )}
+              {photo.lastViewedAt && (
+                <Row
+                  label="최근 확인 시각"
+                  value={new Date(photo.lastViewedAt).toLocaleString()}
+                />
               )}
               {(photo.cameraMake || photo.cameraModel) && (
                 <Row
@@ -406,4 +425,14 @@ function formatSize(n: number) {
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)}KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)}MB`;
   return `${(n / 1024 ** 3).toFixed(2)}GB`;
+}
+
+function formatFileType(mimeType: string) {
+  const m = mimeType.toLowerCase();
+  if (m === 'image/heic' || m === 'image/heif') return 'HEIF 이미지';
+  const [kind, sub] = m.split('/');
+  const label = (sub || mimeType).toUpperCase();
+  if (kind === 'image') return `${label} 이미지`;
+  if (kind === 'video') return `${label} 비디오`;
+  return mimeType;
 }

@@ -18,6 +18,8 @@ model Photo {
   blurred    Boolean    @default(false)
   caption    String?
   takenAt    DateTime?
+  sourceCreatedAt DateTime?
+  sourceModifiedAt DateTime?
   gpsLat     Float?
   gpsLng     Float?
   cameraMake String?
@@ -32,6 +34,8 @@ model Photo {
   @@index([createdAt])
   @@index([sizeBytes])
   @@index([takenAt])
+  @@index([sourceCreatedAt])
+  @@index([sourceModifiedAt])
 }
 
 model Tag {

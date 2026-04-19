@@ -77,7 +77,7 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
       tags: { include: { tag: true } },
       views: {
         where: { viewerName: user },
-        select: { viewerName: true },
+        select: { viewedAt: true },
         take: 1,
       },
     },
@@ -87,6 +87,7 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
     serializePhoto({
       ...updated,
       unseen: updated.ownerName !== user && updated.views.length === 0,
+      lastViewedAt: updated.views[0]?.viewedAt ?? null,
     }),
   );
 }

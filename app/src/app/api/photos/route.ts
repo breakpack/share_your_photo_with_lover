@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 import { serializePhoto } from '@/lib/serialize';
@@ -33,10 +34,7 @@ export async function GET(req: NextRequest) {
     sort === 'time-asc'
       ? { createdAt: 'asc' as const }
       : sort === 'taken-desc'
-        ? [
-            { takenAt: { sort: 'desc' as const, nulls: 'last' as const } },
-            { createdAt: 'desc' as const },
-          ]
+        ? undefined
         : sort === 'size-desc'
           ? { sizeBytes: 'desc' as const }
           : sort === 'size-asc'
@@ -51,27 +49,37 @@ export async function GET(req: NextRequest) {
     }));
   }
 
-  // Over-fetch by one to detect hasMore without a COUNT(*).
-  const rows = await prisma.photo.findMany({
-    where,
-    orderBy,
-    skip: offset,
-    take: limit + 1,
-    include: {
-      tags: { include: { tag: true } },
-      views: {
-        where: { viewerName: user },
-        select: { viewerName: true },
-        take: 1,
-      },
-    },
-  });
+  // For taken-desc, use COALESCE(takenAt, createdAt) so rows without EXIF date
+  // still sort by upload time instead of being pushed to the bottom.
+  const rows =
+    sort === 'taken-desc'
+      ? await findManyTakenDesc({
+          tagNames,
+          offset,
+          take: limit + 1,
+          viewerName: user,
+        })
+      : await prisma.photo.findMany({
+          where,
+          orderBy,
+          skip: offset,
+          take: limit + 1,
+          include: {
+            tags: { include: { tag: true } },
+            views: {
+              where: { viewerName: user },
+              select: { viewedAt: true },
+              take: 1,
+            },
+          },
+        });
 
   const hasMore = rows.length > limit;
   const photos = (hasMore ? rows.slice(0, limit) : rows).map((row) =>
     serializePhoto({
       ...row,
       unseen: row.ownerName !== user && row.views.length === 0,
+      lastViewedAt: row.views[0]?.viewedAt ?? null,
     }),
   );
 
@@ -85,4 +93,59 @@ export async function GET(req: NextRequest) {
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
+}
+
+async function findManyTakenDesc({
+  tagNames,
+  offset,
+  take,
+  viewerName,
+}: {
+  tagNames: string[];
+  offset: number;
+  take: number;
+  viewerName: string;
+}) {
+  const idsQuery =
+    tagNames.length === 0
+      ? Prisma.sql`
+          SELECT p.id
+          FROM "Photo" p
+          ORDER BY COALESCE(p."takenAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
+          OFFSET ${offset}
+          LIMIT ${take}
+        `
+      : Prisma.sql`
+          SELECT p.id
+          FROM "Photo" p
+          JOIN "TagOnPhoto" tp ON tp."photoId" = p.id
+          JOIN "Tag" t ON t.id = tp."tagId"
+          WHERE t.name IN (${Prisma.join(tagNames)})
+          GROUP BY p.id, p."takenAt", p."createdAt"
+          HAVING COUNT(DISTINCT t.name) = ${tagNames.length}
+          ORDER BY COALESCE(p."takenAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
+          OFFSET ${offset}
+          LIMIT ${take}
+        `;
+
+  const idRows = await prisma.$queryRaw<{ id: string }[]>(idsQuery);
+  const orderedIds = idRows.map((r) => r.id);
+  if (orderedIds.length === 0) return [];
+
+  const loaded = await prisma.photo.findMany({
+    where: { id: { in: orderedIds } },
+    include: {
+      tags: { include: { tag: true } },
+      views: {
+        where: { viewerName },
+        select: { viewedAt: true },
+        take: 1,
+      },
+    },
+  });
+
+  const byId = new Map(loaded.map((p) => [p.id, p]));
+  return orderedIds
+    .map((id) => byId.get(id))
+    .filter((p): p is NonNullable<typeof p> => Boolean(p));
 }
