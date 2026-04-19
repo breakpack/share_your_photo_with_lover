@@ -90,8 +90,11 @@ function isMutationMethod(method: string) {
 }
 
 function isSameOriginMutation(req: NextRequest) {
-  const origin = req.headers.get('origin');
-  if (origin && origin !== req.nextUrl.origin) return false;
+  const origin = normalizeOrigin(req.headers.get('origin'));
+  if (origin) {
+    const allowed = getAllowedOrigins(req);
+    if (!allowed.has(origin)) return false;
+  }
 
   const secFetchSite = req.headers.get('sec-fetch-site');
   if (!secFetchSite) return true;
@@ -100,4 +103,40 @@ function isSameOriginMutation(req: NextRequest) {
     secFetchSite === 'same-site' ||
     secFetchSite === 'none'
   );
+}
+
+function getAllowedOrigins(req: NextRequest): Set<string> {
+  const out = new Set<string>();
+
+  const direct = normalizeOrigin(req.nextUrl.origin);
+  if (direct) out.add(direct);
+
+  const forwardedHost = firstHeaderValue(req.headers.get('x-forwarded-host'));
+  const forwardedProto = firstHeaderValue(req.headers.get('x-forwarded-proto'));
+  const host = firstHeaderValue(req.headers.get('host'));
+  const proto = forwardedProto || req.nextUrl.protocol.replace(/:$/, '');
+  const effectiveHost = forwardedHost || host;
+  if (effectiveHost && proto) {
+    const forwarded = normalizeOrigin(`${proto}://${effectiveHost}`);
+    if (forwarded) out.add(forwarded);
+  }
+
+  return out;
+}
+
+function firstHeaderValue(v: string | null): string {
+  if (!v) return '';
+  return v
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)[0] ?? '';
+}
+
+function normalizeOrigin(v: string | null): string {
+  if (!v) return '';
+  try {
+    return new URL(v).origin.toLowerCase();
+  } catch {
+    return '';
+  }
 }

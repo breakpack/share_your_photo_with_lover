@@ -15,6 +15,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json next.config.js next-env.d.ts postcss.config.js tailwind.config.ts ./
 COPY prisma ./prisma
 COPY src ./src
+COPY public ./public
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npx prisma generate
 RUN npm run build
@@ -33,6 +34,7 @@ RUN apk add --no-cache libc6-compat openssl
 # Next.js standalone build: copies only what is needed to run
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 # Prisma schema + generated client + node_modules needed for migrations at start
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules ./node_modules
