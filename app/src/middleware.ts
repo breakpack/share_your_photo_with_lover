@@ -90,10 +90,10 @@ function isMutationMethod(method: string) {
 }
 
 function isSameOriginMutation(req: NextRequest) {
-  const origin = normalizeOrigin(req.headers.get('origin'));
+  const origin = parseOrigin(req.headers.get('origin'));
   if (origin) {
-    const allowed = getAllowedOrigins(req);
-    if (!allowed.has(origin)) return false;
+    const allowedHosts = getAllowedHosts(req);
+    if (!allowedHosts.has(origin.host)) return false;
   }
 
   const secFetchSite = req.headers.get('sec-fetch-site');
@@ -105,21 +105,13 @@ function isSameOriginMutation(req: NextRequest) {
   );
 }
 
-function getAllowedOrigins(req: NextRequest): Set<string> {
+function getAllowedHosts(req: NextRequest): Set<string> {
   const out = new Set<string>();
-
-  const direct = normalizeOrigin(req.nextUrl.origin);
-  if (direct) out.add(direct);
-
+  if (req.nextUrl.host) out.add(req.nextUrl.host.toLowerCase());
   const forwardedHost = firstHeaderValue(req.headers.get('x-forwarded-host'));
-  const forwardedProto = firstHeaderValue(req.headers.get('x-forwarded-proto'));
   const host = firstHeaderValue(req.headers.get('host'));
-  const proto = forwardedProto || req.nextUrl.protocol.replace(/:$/, '');
-  const effectiveHost = forwardedHost || host;
-  if (effectiveHost && proto) {
-    const forwarded = normalizeOrigin(`${proto}://${effectiveHost}`);
-    if (forwarded) out.add(forwarded);
-  }
+  if (forwardedHost) out.add(forwardedHost.toLowerCase());
+  if (host) out.add(host.toLowerCase());
 
   return out;
 }
@@ -132,11 +124,11 @@ function firstHeaderValue(v: string | null): string {
     .filter(Boolean)[0] ?? '';
 }
 
-function normalizeOrigin(v: string | null): string {
-  if (!v) return '';
+function parseOrigin(v: string | null): URL | null {
+  if (!v) return null;
   try {
-    return new URL(v).origin.toLowerCase();
+    return new URL(v);
   } catch {
-    return '';
+    return null;
   }
 }
