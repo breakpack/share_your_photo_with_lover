@@ -15,6 +15,7 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+const DUPLICATE_FILENAME_TAG = '중복파일';
 
 // Client uploads a single file as the raw request body. Metadata comes from
 // query params / headers. This avoids multipart buffering so original files
@@ -81,14 +82,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const duplicateRows = await prisma.photo.findMany({
+      where: { filename, id: { not: photo.id } },
+      select: { id: true },
+    });
+    const hasDuplicateFilename = duplicateRows.length > 0;
+    const effectiveTagNames = hasDuplicateFilename
+      ? Array.from(new Set([...tagNames, DUPLICATE_FILENAME_TAG]))
+      : tagNames;
+
     let tagConnects: { tagId: string }[] = [];
-    if (tagNames.length) {
+    const tagByName = new Map<string, { id: string; name: string }>();
+    if (effectiveTagNames.length) {
       const tags = await Promise.all(
-        tagNames.map((name) =>
+        effectiveTagNames.map((name) =>
           prisma.tag.upsert({ where: { name }, update: {}, create: { name } }),
         ),
       );
+      for (const tag of tags) {
+        tagByName.set(tag.name, { id: tag.id, name: tag.name });
+      }
       tagConnects = tags.map((t) => ({ tagId: t.id }));
+    }
+
+    if (hasDuplicateFilename) {
+      const duplicateTagId = tagByName.get(DUPLICATE_FILENAME_TAG)?.id;
+      if (duplicateTagId) {
+        await prisma.tagOnPhoto.createMany({
+          data: duplicateRows.map((row) => ({
+            photoId: row.id,
+            tagId: duplicateTagId,
+          })),
+          skipDuplicates: true,
+        });
+      }
     }
 
     const updated = await prisma.photo.update({
