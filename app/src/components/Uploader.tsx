@@ -146,6 +146,9 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
         'content-type',
         item.file.type || 'application/octet-stream',
       );
+      if (Number.isFinite(item.file.lastModified) && item.file.lastModified > 0) {
+        xhr.setRequestHeader('x-file-last-modified', String(item.file.lastModified));
+      }
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable) {
           const pct = Math.round((e.loaded / e.total) * 100);

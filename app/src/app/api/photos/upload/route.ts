@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
   const hidden = url.searchParams.get('hidden') === '1';
   const blurred = url.searchParams.get('blurred') === '1';
   const caption = url.searchParams.get('caption') || null;
+  const clientLastModified = parseEpochMs(req.headers.get('x-file-last-modified'));
   const tagNamesParam = url.searchParams.get('tags') || '';
   const tagNames = tagNamesParam
     .split(',')
@@ -97,8 +98,8 @@ export async function POST(req: NextRequest) {
         width: imageMeta.width ?? undefined,
         height: imageMeta.height ?? undefined,
         takenAt: imageMeta.takenAt,
-        sourceCreatedAt: imageMeta.sourceCreatedAt,
-        sourceModifiedAt: imageMeta.sourceModifiedAt,
+        sourceCreatedAt: imageMeta.sourceCreatedAt ?? imageMeta.takenAt ?? undefined,
+        sourceModifiedAt: imageMeta.sourceModifiedAt ?? clientLastModified ?? undefined,
         gpsLat: imageMeta.gpsLat,
         gpsLng: imageMeta.gpsLng,
         cameraMake: imageMeta.cameraMake,
@@ -121,4 +122,12 @@ export async function POST(req: NextRequest) {
     await prisma.photo.delete({ where: { id: photo.id } }).catch(() => {});
     return NextResponse.json({ error: 'upload failed' }, { status: 500 });
   }
+}
+
+function parseEpochMs(v: string | null): Date | null {
+  if (!v) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  const d = new Date(n);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
