@@ -147,11 +147,11 @@ export default function Toolbar({
         <select
           value={sort}
           onChange={(e) => onSortChange(e.target.value as SortKey)}
-          className="bg-neutral-800 rounded-lg px-2 py-1.5 text-xs sm:text-sm outline-none shrink-0 w-[96px] sm:w-auto"
+          className="bg-neutral-800 rounded-lg px-2 py-1.5 text-xs sm:text-sm outline-none shrink-0 w-[128px] sm:w-auto"
         >
+          <option value="source-created-desc">원본생성시각</option>
           <option value="time-desc">최신순</option>
           <option value="time-asc">오래된순</option>
-          <option value="taken-desc">촬영일 최신순</option>
           <option value="size-desc">큰 크기순</option>
           <option value="size-asc">작은 크기순</option>
         </select>

@@ -28,6 +28,7 @@ export type Photo = {
 };
 
 export type SortKey =
+  | 'source-created-desc'
   | 'time-desc'
   | 'time-asc'
   | 'size-desc'

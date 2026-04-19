@@ -15,9 +15,10 @@ export async function GET(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
-  const sort = url.searchParams.get('sort') || 'taken-desc';
+  const sort = url.searchParams.get('sort') || 'source-created-desc';
   const tagParam = url.searchParams.get('tags') || '';
   const tagNames = tagParam.split(',').map((s) => s.trim()).filter(Boolean);
+  const sourceCreatedSort = sort === 'source-created-desc' || sort === 'taken-desc';
 
   const limit = clamp(
     parseInt(url.searchParams.get('limit') || String(DEFAULT_LIMIT), 10) ||
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
   const orderBy: any =
     sort === 'time-asc'
       ? { createdAt: 'asc' as const }
-      : sort === 'taken-desc'
+      : sourceCreatedSort
         ? undefined
         : sort === 'size-desc'
           ? { sizeBytes: 'desc' as const }
@@ -49,11 +50,11 @@ export async function GET(req: NextRequest) {
     }));
   }
 
-  // For taken-desc, use COALESCE(takenAt, createdAt) so rows without EXIF date
-  // still sort by upload time instead of being pushed to the bottom.
+  // For source-created sort, use COALESCE(sourceCreatedAt, createdAt) so rows
+  // without source creation date still sort by upload time.
   const rows =
-    sort === 'taken-desc'
-      ? await findManyTakenDesc({
+    sourceCreatedSort
+      ? await findManySourceCreatedDesc({
           tagNames,
           offset,
           take: limit + 1,
@@ -95,7 +96,7 @@ function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
-async function findManyTakenDesc({
+async function findManySourceCreatedDesc({
   tagNames,
   offset,
   take,
@@ -111,7 +112,7 @@ async function findManyTakenDesc({
       ? Prisma.sql`
           SELECT p.id
           FROM "Photo" p
-          ORDER BY COALESCE(p."takenAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
+          ORDER BY COALESCE(p."sourceCreatedAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
           OFFSET ${offset}
           LIMIT ${take}
         `
@@ -121,9 +122,9 @@ async function findManyTakenDesc({
           JOIN "TagOnPhoto" tp ON tp."photoId" = p.id
           JOIN "Tag" t ON t.id = tp."tagId"
           WHERE t.name IN (${Prisma.join(tagNames)})
-          GROUP BY p.id, p."takenAt", p."createdAt"
+          GROUP BY p.id, p."sourceCreatedAt", p."createdAt"
           HAVING COUNT(DISTINCT t.name) = ${tagNames.length}
-          ORDER BY COALESCE(p."takenAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
+          ORDER BY COALESCE(p."sourceCreatedAt", p."createdAt") DESC, p."createdAt" DESC, p.id DESC
           OFFSET ${offset}
           LIMIT ${take}
         `;

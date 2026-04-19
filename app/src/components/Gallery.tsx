@@ -18,7 +18,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
 
   const [allTags, setAllTags] = useState<TagSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [sort, setSort] = useState<SortKey>('taken-desc');
+  const [sort, setSort] = useState<SortKey>('source-created-desc');
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
