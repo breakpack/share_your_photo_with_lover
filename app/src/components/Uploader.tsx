@@ -36,6 +36,7 @@ const PROGRESS_THROTTLE_MS = 140;
 export default function Uploader({ initialFiles, allTags, onClose, onDone }: Props) {
   const [items, setItems] = useState<Item[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [giftWrap, setGiftWrap] = useState(false);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const progressRef = useRef<Record<string, { ts: number; pct: number }>>({});
@@ -145,7 +146,7 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
 
   async function uploadOneAttempt(
     item: Item,
-    opts: { bulkMode: boolean },
+    opts: { bulkMode: boolean; giftBoxId: string | null; giftOrder: number | null },
   ): Promise<{ ok: boolean; retryable: boolean; message: string }> {
     return new Promise((resolve) => {
       const xhr = new XMLHttpRequest();
@@ -158,6 +159,10 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
         params.set('caption', item.caption.trim());
       }
       if (item.tags.length) params.set('tags', item.tags.join(','));
+      if (opts.giftBoxId) {
+        params.set('giftBoxId', opts.giftBoxId);
+        if (opts.giftOrder != null) params.set('giftOrder', String(opts.giftOrder));
+      }
       xhr.open('POST', `/api/photos/upload?${params}`);
       xhr.setRequestHeader(
         'content-type',
@@ -214,7 +219,10 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
     });
   }
 
-  async function uploadOne(item: Item, opts: { bulkMode: boolean }) {
+  async function uploadOne(
+    item: Item,
+    opts: { bulkMode: boolean; giftBoxId: string | null; giftOrder: number | null },
+  ) {
     let lastMessage = '';
     const maxAttempts = RETRY_LIMIT + 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -246,6 +254,7 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
     if (!queue.length) return;
     setUploading(true);
     const bulkMode = queue.length >= 80;
+    const giftBoxId = giftWrap ? buildGiftBoxId() : null;
 
     // Worker pool: up to CONCURRENCY uploads in flight at once. Each worker
     // pulls the next index from a shared cursor until the queue is drained.
@@ -257,7 +266,11 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
       while (true) {
         const i = cursor++;
         if (i >= queue.length) return;
-        const ok = await uploadOne(queue[i], { bulkMode });
+        const ok = await uploadOne(queue[i], {
+          bulkMode,
+          giftBoxId,
+          giftOrder: giftBoxId ? i : null,
+        });
         if (ok) anyOk = true;
       }
     };
@@ -310,6 +323,16 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
         >
           취소
         </button>
+        <label className="inline-flex items-center gap-1.5 text-xs sm:text-sm text-neutral-200 shrink-0">
+          <input
+            type="checkbox"
+            checked={giftWrap}
+            onChange={(e) => setGiftWrap(e.target.checked)}
+            disabled={uploading || items.length === 0}
+            className="accent-amber-400"
+          />
+          담아보내기
+        </label>
         <button
           onClick={startUpload}
           disabled={!canUpload || uploading}
@@ -318,6 +341,11 @@ export default function Uploader({ initialFiles, allTags, onClose, onDone }: Pro
           {uploading ? '업로드 중...' : '업로드'}
         </button>
       </div>
+      {giftWrap && (
+        <div className="px-3 sm:px-4 py-2 border-b border-neutral-800 bg-amber-500/10 text-[11px] sm:text-xs text-amber-100">
+          선택한 파일이 선물상자로 업로드됩니다. 갤러리에서 상자를 열면 사진이 펼쳐진 뒤 목록에 추가됩니다.
+        </div>
+      )}
 
       {items.length === 0 ? (
         <DropZone onFiles={addFiles} onPickClick={() => inputRef.current?.click()} />
@@ -731,6 +759,14 @@ function formatSize(n: number) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildGiftBoxId() {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID().replace(/-/g, '')
+      : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+  return `gift_${Date.now()}_${random.slice(0, 16)}`;
 }
 
 function pickUploadConcurrency(queue: Item[]): number {

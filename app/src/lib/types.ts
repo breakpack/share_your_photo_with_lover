@@ -2,6 +2,14 @@ export type PhotoTag = { id: string; name: string };
 
 export type TagSummary = { id: string; name: string; count: number };
 
+export type GiftBoxSummary = {
+  id: string;
+  ownerName: string;
+  createdAt: string;
+  photoCount: number;
+  previewPhotoIds: string[];
+};
+
 export type Photo = {
   id: string;
   filename: string;
@@ -22,6 +30,7 @@ export type Photo = {
   cameraModel: string | null;
   artist: string | null;
   ownerName: string;
+  giftBoxId: string | null;
   createdAt: string;
   unseen: boolean;
   tags: PhotoTag[];

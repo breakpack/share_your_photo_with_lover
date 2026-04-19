@@ -20,6 +20,7 @@ export function serializePhoto(p: any) {
     cameraModel: p.cameraModel,
     artist: p.artist,
     ownerName: p.ownerName,
+    giftBoxId: p.giftBoxId ?? null,
     createdAt: p.createdAt,
     unseen: Boolean(p.unseen),
     tags: (p.tags ?? []).map((t: any) => ({ id: t.tag.id, name: t.tag.name })),

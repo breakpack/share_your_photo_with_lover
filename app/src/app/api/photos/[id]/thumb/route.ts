@@ -29,8 +29,14 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   const user = getCurrentUser();
   if (!user) return new Response('unauthorized', { status: 401, headers: secureHeaders() });
 
-  const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
+  const photo = await prisma.photo.findUnique({
+    where: { id: ctx.params.id },
+    include: { giftBox: { select: { openedAt: true } } },
+  });
   if (!photo) return new Response('not found', { status: 404, headers: secureHeaders() });
+  if (photo.giftBoxId && !photo.giftBox?.openedAt) {
+    return new Response('not found', { status: 404, headers: secureHeaders() });
+  }
 
   const file = thumbPath(photo.id);
   let stat;

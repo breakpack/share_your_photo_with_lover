@@ -12,8 +12,14 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
   const user = getCurrentUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
+  const photo = await prisma.photo.findUnique({
+    where: { id: ctx.params.id },
+    include: { giftBox: { select: { openedAt: true } } },
+  });
   if (!photo) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (photo.giftBoxId && !photo.giftBox?.openedAt) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const isOwner = photo.ownerName === user;
@@ -96,8 +102,14 @@ export async function DELETE(_req: NextRequest, ctx: { params: { id: string } })
   const user = getCurrentUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
+  const photo = await prisma.photo.findUnique({
+    where: { id: ctx.params.id },
+    include: { giftBox: { select: { openedAt: true } } },
+  });
   if (!photo) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (photo.giftBoxId && !photo.giftBox?.openedAt) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
   if (photo.ownerName !== user) {
     return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }

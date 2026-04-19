@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 
 const DEFAULT_LIMIT = 60;
 const MAX_LIMIT = 200;
+const GIFT_PREVIEW_COUNT = 5;
 
 export async function GET(req: NextRequest) {
   const user = getCurrentUser();
@@ -16,8 +17,10 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url);
   const sort = url.searchParams.get('sort') || 'source-created-desc';
-  const tagParam = url.searchParams.get('tags') || '';
-  const tagNames = tagParam.split(',').map((s) => s.trim()).filter(Boolean);
+  const includeTagNames = parseTagList(url.searchParams.get('tags') || '');
+  const excludeTagNames = parseTagList(url.searchParams.get('excludeTags') || '').filter(
+    (name) => !includeTagNames.includes(name),
+  );
   const sourceCreatedSort = sort === 'source-created-desc' || sort === 'taken-desc';
   const cursor = parseSourceCreatedCursor(url.searchParams.get('cursor'));
 
@@ -45,11 +48,30 @@ export async function GET(req: NextRequest) {
 
   const where: any = {};
 
-  if (tagNames.length) {
-    where.AND = tagNames.map((name) => ({
-      tags: { some: { tag: { name } } },
-    }));
+  const andClauses: any[] = [
+    {
+      OR: [{ giftBoxId: null }, { giftBox: { openedAt: { not: null } } }],
+    },
+  ];
+  if (includeTagNames.length) {
+    andClauses.push(
+      ...includeTagNames.map((name) => ({
+        tags: { some: { tag: { name } } },
+      })),
+    );
   }
+  if (excludeTagNames.length) {
+    andClauses.push({
+      tags: {
+        none: {
+          tag: {
+            name: { in: excludeTagNames },
+          },
+        },
+      },
+    });
+  }
+  where.AND = andClauses;
 
   const photoSelect = photoListSelect(user);
 
@@ -58,7 +80,8 @@ export async function GET(req: NextRequest) {
   const rows =
     sourceCreatedSort
       ? await findManySourceCreatedDesc({
-          tagNames,
+          includeTagNames,
+          excludeTagNames,
           cursor,
           take: limit + 1,
           photoSelect,
@@ -85,8 +108,14 @@ export async function GET(req: NextRequest) {
       ? encodeSourceCreatedCursor(pageRows[pageRows.length - 1])
       : null;
 
+  const isFirstPage = sourceCreatedSort ? cursor == null : offset === 0;
+  const giftBoxes = isFirstPage
+    ? await findUnopenedGiftBoxes({ includeTagNames, excludeTagNames })
+    : [];
+
   return NextResponse.json({
     photos,
+    giftBoxes,
     currentUser: user,
     hasMore,
     nextOffset: sourceCreatedSort ? null : offset + photos.length,
@@ -118,6 +147,7 @@ function photoListSelect(viewerName: string) {
     cameraModel: true,
     artist: true,
     ownerName: true,
+    giftBoxId: true,
     createdAt: true,
     tags: { select: { tag: { select: { id: true, name: true } } } },
     views: {
@@ -133,23 +163,51 @@ type PhotoListRow = Prisma.PhotoGetPayload<{
 }>;
 
 async function findManySourceCreatedDesc({
-  tagNames,
+  includeTagNames,
+  excludeTagNames,
   cursor,
   take,
   photoSelect,
 }: {
-  tagNames: string[];
+  includeTagNames: string[];
+  excludeTagNames: string[];
   cursor: SourceCreatedCursor | null;
   take: number;
   photoSelect: ReturnType<typeof photoListSelect>;
 }) {
+  const excludePredicate = excludeTagNames.length
+    ? Prisma.sql`
+        NOT EXISTS (
+          SELECT 1
+          FROM "TagOnPhoto" xtp
+          JOIN "Tag" xt ON xt.id = xtp."tagId"
+          WHERE xtp."photoId" = p.id
+            AND xt.name IN (${Prisma.join(excludeTagNames)})
+        )
+      `
+    : Prisma.sql`TRUE`;
+
+  const visiblePredicate = Prisma.sql`
+    (
+      p."giftBoxId" IS NULL
+      OR EXISTS (
+        SELECT 1
+        FROM "GiftBox" gb0
+        WHERE gb0.id = p."giftBoxId"
+          AND gb0."openedAt" IS NOT NULL
+      )
+    )
+  `;
+
   const baseQuery =
-    tagNames.length === 0
+    includeTagNames.length === 0
       ? Prisma.sql`
           SELECT p.id AS id,
                  COALESCE(p."sourceCreatedAt", p."createdAt") AS sort_key,
                  p."createdAt" AS created_at
           FROM "Photo" p
+          WHERE ${visiblePredicate}
+            AND ${excludePredicate}
         `
       : Prisma.sql`
           SELECT p.id AS id,
@@ -158,9 +216,11 @@ async function findManySourceCreatedDesc({
           FROM "Photo" p
           JOIN "TagOnPhoto" tp ON tp."photoId" = p.id
           JOIN "Tag" t ON t.id = tp."tagId"
-          WHERE t.name IN (${Prisma.join(tagNames)})
+          WHERE t.name IN (${Prisma.join(includeTagNames)})
+            AND ${visiblePredicate}
+            AND ${excludePredicate}
           GROUP BY p.id, p."sourceCreatedAt", p."createdAt"
-          HAVING COUNT(DISTINCT t.name) = ${tagNames.length}
+          HAVING COUNT(DISTINCT t.name) = ${includeTagNames.length}
         `;
 
   const cursorPredicate = cursor
@@ -201,6 +261,71 @@ async function findManySourceCreatedDesc({
     .filter((p): p is PhotoListRow => Boolean(p));
 }
 
+async function findUnopenedGiftBoxes({
+  includeTagNames,
+  excludeTagNames,
+}: {
+  includeTagNames: string[];
+  excludeTagNames: string[];
+}) {
+  const andClauses: any[] = [];
+  if (includeTagNames.length) {
+    andClauses.push(
+      ...includeTagNames.map((name) => ({
+        photos: {
+          some: {
+            tags: {
+              some: {
+                tag: { name },
+              },
+            },
+          },
+        },
+      })),
+    );
+  }
+  if (excludeTagNames.length) {
+    andClauses.push({
+      photos: {
+        none: {
+          tags: {
+            some: {
+              tag: {
+                name: { in: excludeTagNames },
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  const gifts = await prisma.giftBox.findMany({
+    where: {
+      openedAt: null,
+      photos: { some: {} },
+      AND: andClauses,
+    },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      _count: { select: { photos: true } },
+      photos: {
+        select: { id: true },
+        orderBy: [{ giftOrder: 'asc' }, { createdAt: 'asc' }],
+        take: GIFT_PREVIEW_COUNT,
+      },
+    },
+  });
+
+  return gifts.map((g) => ({
+    id: g.id,
+    ownerName: g.ownerName,
+    createdAt: g.createdAt,
+    photoCount: g._count.photos,
+    previewPhotoIds: g.photos.map((p) => p.id),
+  }));
+}
+
 type SourceCreatedCursor = {
   sortKey: Date;
   createdAt: Date;
@@ -229,4 +354,15 @@ function encodeSourceCreatedCursor(row: { sourceCreatedAt: Date | null; createdA
     i: row.id,
   });
   return Buffer.from(payload, 'utf8').toString('base64url');
+}
+
+function parseTagList(raw: string): string[] {
+  return Array.from(
+    new Set(
+      raw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  );
 }

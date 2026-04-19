@@ -18,6 +18,8 @@ export function middleware(req: NextRequest) {
   const isProtectedApi =
     pathname === '/api/photos' ||
     pathname.startsWith('/api/photos/') ||
+    pathname === '/api/gifts' ||
+    pathname.startsWith('/api/gifts/') ||
     pathname === '/api/tags' ||
     pathname.startsWith('/api/tags/');
 

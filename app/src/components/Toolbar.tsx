@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { TagSummary, SortKey } from '@/lib/types';
 
 type Props = {
@@ -8,6 +8,9 @@ type Props = {
   tags: TagSummary[];
   selectedTags: string[];
   onSelectedTagsChange: (tags: string[]) => void;
+  excludedTags: string[];
+  onExcludedTagsChange: (tags: string[]) => void;
+  onResetTagFilters: () => void;
   selectionMode: boolean;
   selectedPhotoCount: number;
   bulkBusy: boolean;
@@ -24,12 +27,18 @@ type Props = {
 
 const MIN_COLS = 1;
 const MAX_COLS = 12;
+const DEFAULT_EXCLUDED_TAG = '중복파일';
+
+type TagMode = 'none' | 'include' | 'exclude';
 
 export default function Toolbar({
   currentUser,
   tags,
   selectedTags,
   onSelectedTagsChange,
+  excludedTags,
+  onExcludedTagsChange,
+  onResetTagFilters,
   selectionMode,
   selectedPhotoCount,
   bulkBusy,
@@ -48,12 +57,34 @@ export default function Toolbar({
   const dec = () => onColumnsChange(Math.max(MIN_COLS, columns - 1));
   const inc = () => onColumnsChange(Math.min(MAX_COLS, columns + 1));
 
-  function toggleTag(name: string) {
-    onSelectedTagsChange(
-      selectedTags.includes(name)
-        ? selectedTags.filter((t) => t !== name)
-        : [...selectedTags, name],
-    );
+  const selectedTagSet = useMemo(() => new Set(selectedTags), [selectedTags]);
+  const excludedTagSet = useMemo(() => new Set(excludedTags), [excludedTags]);
+
+  const onlyDefaultExclude =
+    selectedTags.length === 0 &&
+    excludedTags.length === 1 &&
+    excludedTags[0] === DEFAULT_EXCLUDED_TAG;
+  const activeFilterCount = onlyDefaultExclude ? 0 : selectedTags.length + excludedTags.length;
+
+  function modeOf(name: string): TagMode {
+    if (selectedTagSet.has(name)) return 'include';
+    if (excludedTagSet.has(name)) return 'exclude';
+    return 'none';
+  }
+
+  function toggleTagMode(name: string) {
+    const mode = modeOf(name);
+    if (mode === 'none') {
+      onSelectedTagsChange(uniq([...selectedTags, name]));
+      onExcludedTagsChange(excludedTags.filter((t) => t !== name));
+      return;
+    }
+    if (mode === 'include') {
+      onSelectedTagsChange(selectedTags.filter((t) => t !== name));
+      onExcludedTagsChange(uniq([...excludedTags, name]));
+      return;
+    }
+    onExcludedTagsChange(excludedTags.filter((t) => t !== name));
   }
 
   return (
@@ -64,32 +95,43 @@ export default function Toolbar({
           <span className="hidden sm:inline">PhotoShare</span>
         </div>
 
-        {/* Desktop: inline tag chips */}
+        {/* Desktop: inline tri-state tag chips (none -> include -> exclude -> none) */}
         <div className="hidden md:flex gap-1 items-center flex-1 min-w-0 overflow-x-auto no-scrollbar pl-2 ml-2 border-l border-neutral-800">
           {tags.map((t) => {
-            const active = selectedTags.includes(t.name);
+            const mode = modeOf(t.name);
             return (
               <button
                 key={t.id}
-                onClick={() => toggleTag(t.name)}
+                onClick={() => toggleTagMode(t.name)}
                 className={
                   'px-2.5 py-1 rounded-full text-xs transition shrink-0 ' +
-                  (active
+                  (mode === 'include'
                     ? 'bg-white text-black'
-                    : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200')
+                    : mode === 'exclude'
+                      ? 'bg-red-500/25 text-red-100 border border-red-400/40'
+                      : 'bg-neutral-800 hover:bg-neutral-700 text-neutral-200')
+                }
+                title={
+                  mode === 'include'
+                    ? '포함 필터'
+                    : mode === 'exclude'
+                      ? '제외 필터'
+                      : '필터 없음'
                 }
               >
+                {mode === 'include' ? '+' : mode === 'exclude' ? '−' : ''}
+                {mode === 'include' || mode === 'exclude' ? ' ' : ''}
                 {t.name}
                 <span className="ml-1 opacity-60">{t.count}</span>
               </button>
             );
           })}
-          {selectedTags.length > 0 && (
+          {(activeFilterCount > 0 || !onlyDefaultExclude) && (
             <button
-              onClick={() => onSelectedTagsChange([])}
+              onClick={onResetTagFilters}
               className="text-xs text-neutral-400 hover:text-white px-2 shrink-0"
             >
-              초기화
+              필터 초기화
             </button>
           )}
         </div>
@@ -99,21 +141,21 @@ export default function Toolbar({
           onClick={() => setFilterOpen((v) => !v)}
           className={
             'md:hidden ml-auto shrink-0 rounded-lg px-2.5 py-1.5 text-sm flex items-center gap-1 ' +
-            (filterOpen || selectedTags.length > 0
+            (filterOpen || activeFilterCount > 0
               ? 'bg-white text-black'
               : 'bg-neutral-800 text-neutral-200')
           }
           aria-label="필터"
         >
           필터
-          {selectedTags.length > 0 && (
+          {activeFilterCount > 0 && (
             <span
               className={
                 'rounded-full text-[10px] px-1.5 py-0.5 ' +
                 (filterOpen ? 'bg-black text-white' : 'bg-blue-500 text-white')
               }
             >
-              {selectedTags.length}
+              {activeFilterCount}
             </span>
           )}
         </button>
@@ -222,37 +264,42 @@ export default function Toolbar({
               로그아웃
             </button>
           </div>
+          <div className="text-[11px] text-neutral-500 mb-2">
+            기본값: 중복파일 태그는 제외 상태로 시작합니다.
+          </div>
           {tags.length === 0 ? (
             <div className="text-sm text-neutral-500">태그가 없습니다.</div>
           ) : (
             <>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs text-neutral-400">
-                  태그 필터 (여러 개 선택 시 모두 포함)
+                  태그 필터 (탭할 때마다 없음 → 포함 → 제외 순환)
                 </span>
-                {selectedTags.length > 0 && (
-                  <button
-                    onClick={() => onSelectedTagsChange([])}
-                    className="text-xs text-neutral-400 hover:text-white"
-                  >
-                    초기화
-                  </button>
-                )}
+                <button
+                  onClick={onResetTagFilters}
+                  className="text-xs text-neutral-400 hover:text-white"
+                >
+                  필터 초기화
+                </button>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {tags.map((t) => {
-                  const active = selectedTags.includes(t.name);
+                  const mode = modeOf(t.name);
                   return (
                     <button
                       key={t.id}
-                      onClick={() => toggleTag(t.name)}
+                      onClick={() => toggleTagMode(t.name)}
                       className={
                         'px-3 py-1.5 rounded-full text-sm transition ' +
-                        (active
+                        (mode === 'include'
                           ? 'bg-white text-black'
-                          : 'bg-neutral-800 text-neutral-200')
+                          : mode === 'exclude'
+                            ? 'bg-red-500/25 text-red-100 border border-red-400/40'
+                            : 'bg-neutral-800 text-neutral-200')
                       }
                     >
+                      {mode === 'include' ? '+' : mode === 'exclude' ? '−' : ''}
+                      {mode === 'include' || mode === 'exclude' ? ' ' : ''}
                       {t.name}
                       <span className="ml-1 opacity-60 text-xs">{t.count}</span>
                     </button>
@@ -265,4 +312,8 @@ export default function Toolbar({
       )}
     </header>
   );
+}
+
+function uniq(values: string[]) {
+  return Array.from(new Set(values.map((v) => v.trim()).filter(Boolean)));
 }

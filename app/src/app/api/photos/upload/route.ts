@@ -36,6 +36,8 @@ export async function POST(req: NextRequest) {
   const hidden = url.searchParams.get('hidden') === '1';
   const blurred = url.searchParams.get('blurred') === '1';
   const caption = url.searchParams.get('caption') || null;
+  const giftBoxId = parseGiftBoxId(url.searchParams.get('giftBoxId'));
+  const giftOrder = parseGiftOrder(url.searchParams.get('giftOrder'));
   const clientLastModified = parseEpochMs(req.headers.get('x-file-last-modified'));
   const tagNamesParam = url.searchParams.get('tags') || '';
   const tagNames = Array.from(
@@ -58,6 +60,24 @@ export async function POST(req: NextRequest) {
 
   await ensureStorage();
 
+  if (giftBoxId) {
+    const box = await prisma.giftBox.upsert({
+      where: { id: giftBoxId },
+      update: {},
+      create: {
+        id: giftBoxId,
+        ownerName: user,
+      },
+      select: { ownerName: true, openedAt: true },
+    });
+    if (box.ownerName !== user) {
+      return NextResponse.json({ error: 'invalid giftBox owner' }, { status: 403 });
+    }
+    if (box.openedAt) {
+      return NextResponse.json({ error: 'gift box already opened' }, { status: 409 });
+    }
+  }
+
   const photo = await prisma.photo.create({
     data: {
       filename,
@@ -67,6 +87,8 @@ export async function POST(req: NextRequest) {
       blurred,
       caption: caption || null,
       ownerName: user,
+      giftBoxId: giftBoxId ?? undefined,
+      giftOrder: giftBoxId ? (giftOrder ?? undefined) : undefined,
     },
   });
 
@@ -175,4 +197,19 @@ function parseEpochMs(v: string | null): Date | null {
   if (!Number.isFinite(n) || n <= 0) return null;
   const d = new Date(n);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function parseGiftBoxId(v: string | null): string | null {
+  if (!v) return null;
+  const id = v.trim();
+  if (!id) return null;
+  if (!/^[A-Za-z0-9_-]{8,120}$/.test(id)) return null;
+  return id;
+}
+
+function parseGiftOrder(v: string | null): number | null {
+  if (!v) return null;
+  const n = Number.parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
 }

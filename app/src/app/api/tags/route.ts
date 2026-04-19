@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { getCurrentUser } from '@/lib/auth';
 
@@ -9,15 +10,27 @@ export async function GET() {
   const user = getCurrentUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
+  const visiblePhoto: Prisma.PhotoWhereInput = {
+    OR: [{ giftBoxId: null }, { giftBox: { openedAt: { not: null } } }],
+  };
+
   // Only return tags attached to photos the user can see.
   const tags = await prisma.tag.findMany({
     where: {
       photos: {
-        some: {},
+        some: { photo: visiblePhoto },
       },
     },
     orderBy: { name: 'asc' },
-    include: { _count: { select: { photos: true } } },
+    include: {
+      _count: {
+        select: {
+          photos: {
+            where: { photo: visiblePhoto },
+          },
+        },
+      },
+    },
   });
 
   return NextResponse.json({

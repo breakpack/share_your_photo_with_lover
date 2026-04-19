@@ -13,8 +13,14 @@ export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
   const user = getCurrentUser();
   if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const photo = await prisma.photo.findUnique({ where: { id: ctx.params.id } });
+  const photo = await prisma.photo.findUnique({
+    where: { id: ctx.params.id },
+    include: { giftBox: { select: { openedAt: true } } },
+  });
   if (!photo) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  if (photo.giftBoxId && !photo.giftBox?.openedAt) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
 
   if (!photo.mimeType.startsWith('image/')) {
     return NextResponse.json({ error: 'only image metadata can be reparsed' }, { status: 400 });

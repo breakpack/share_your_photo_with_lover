@@ -1,16 +1,25 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { Photo, TagSummary, SortKey } from '@/lib/types';
+import type { GiftBoxSummary, Photo, TagSummary, SortKey } from '@/lib/types';
 import Grid from './Grid';
 import Lightbox from './Lightbox';
 import Uploader from './Uploader';
 import Toolbar from './Toolbar';
 
 const PAGE_SIZE = 60;
+const DUPLICATE_FILENAME_TAG = '중복파일';
+const DEFAULT_EXCLUDED_TAGS = [DUPLICATE_FILENAME_TAG];
+const GIFT_REVEAL_MS = 950;
+
+type GiftRevealState = {
+  gift: GiftBoxSummary;
+  phase: 'opening' | 'burst';
+};
 
 export default function Gallery({ currentUser }: { currentUser: string }) {
   const [photos, setPhotos] = useState<Photo[]>([]);
+  const [giftBoxes, setGiftBoxes] = useState<GiftBoxSummary[]>([]);
   const [nextOffset, setNextOffset] = useState(0);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -19,14 +28,18 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
 
   const [allTags, setAllTags] = useState<TagSummary[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [excludedTags, setExcludedTags] = useState<string[]>(DEFAULT_EXCLUDED_TAGS);
   const [sort, setSort] = useState<SortKey>('source-created-desc');
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [openingGiftId, setOpeningGiftId] = useState<string | null>(null);
+  const [giftReveal, setGiftReveal] = useState<GiftRevealState | null>(null);
   const [uploaderOpen, setUploaderOpen] = useState(false);
   const [dragHover, setDragHover] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
+  const [bulkTagInput, setBulkTagInput] = useState('');
   const [columns, setColumns] = useState<number>(() => {
     if (typeof window === 'undefined') return 4;
     const stored = window.localStorage.getItem('photoshare.columns');
@@ -82,6 +95,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         params.set('offset', String(opts.offset));
       }
       if (selectedTags.length) params.set('tags', selectedTags.join(','));
+      if (excludedTags.length) params.set('excludeTags', excludedTags.join(','));
       const res = await fetch(`/api/photos?${params}`);
       if (res.status === 401) {
         window.location.href = '/login';
@@ -90,12 +104,13 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
       if (!res.ok) return null;
       return (await res.json()) as {
         photos: Photo[];
+        giftBoxes?: GiftBoxSummary[];
         hasMore: boolean;
         nextOffset: number | null;
         nextCursor: string | null;
       };
     },
-    [sort, selectedTags],
+    [excludedTags, sort, selectedTags],
   );
 
   const reset = useCallback(async () => {
@@ -105,6 +120,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     if (seq !== requestSeq.current) return;
     if (data) {
       setPhotos(data.photos);
+      setGiftBoxes(data.giftBoxes ?? []);
       setNextOffset(data.nextOffset ?? 0);
       setNextCursor(data.nextCursor ?? null);
       setHasMore(data.hasMore);
@@ -265,10 +281,48 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
     [photos.length, hasMore, loadingMore, loadMore],
   );
 
+  const openGiftBox = useCallback(
+    async (gift: GiftBoxSummary) => {
+      if (selectionMode || openingGiftId) return;
+      setOpeningGiftId(gift.id);
+      setGiftReveal({ gift, phase: 'opening' });
+      try {
+        const res = await fetch(`/api/gifts/${gift.id}/open`, { method: 'POST' });
+        if (res.status === 401) {
+          window.location.href = '/login';
+          return;
+        }
+        if (!res.ok) {
+          throw new Error(`gift open failed: ${res.status}`);
+        }
+        const body = await res.json().catch(() => ({}));
+        const photoCount =
+          typeof body?.photoCount === 'number' && Number.isFinite(body.photoCount)
+            ? Math.max(0, body.photoCount)
+            : gift.photoCount;
+        setGiftReveal({ gift: { ...gift, photoCount }, phase: 'burst' });
+        await sleep(GIFT_REVEAL_MS);
+        setGiftReveal(null);
+        setGiftBoxes((prev) => prev.filter((g) => g.id !== gift.id));
+        await reset();
+      } catch (err) {
+        console.error('gift open failed', err);
+        setGiftReveal(null);
+        alert('선물상자를 열지 못했습니다.');
+      } finally {
+        setOpeningGiftId(null);
+      }
+    },
+    [openingGiftId, reset, selectionMode],
+  );
+
   function toggleSelectionMode() {
     if (!selectionMode && lightboxIndex != null) closeLightbox();
     setSelectionMode((v) => {
-      if (v) setSelectedIds([]);
+      if (v) {
+        setSelectedIds([]);
+        setBulkTagInput('');
+      }
       return !v;
     });
   }
@@ -287,6 +341,11 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
 
   function clearSelection() {
     setSelectedIds([]);
+  }
+
+  function resetTagFilters() {
+    setSelectedTags([]);
+    setExcludedTags(DEFAULT_EXCLUDED_TAGS);
   }
 
   async function patchPhotoById(photoId: string, patch: any) {
@@ -339,6 +398,52 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
           ),
         );
       }
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function bulkUpdateSelectedTags(mode: 'add' | 'remove') {
+    if (bulkBusy || selectedPhotos.length === 0) return;
+    const tag = bulkTagInput.trim();
+    if (!tag) return;
+
+    const targets = selectedPhotos.filter((p) => p.ownerName === currentUser);
+    if (targets.length === 0) return;
+
+    setBulkBusy(true);
+    try {
+      const updated = (
+        await Promise.all(
+          targets.map(async (p) => {
+            const currentNames = p.tags.map((t) => t.name);
+            const hasTag = currentNames.includes(tag);
+            const nextNames =
+              mode === 'add'
+                ? hasTag
+                  ? null
+                  : [...currentNames, tag]
+                : hasTag
+                  ? currentNames.filter((name) => name !== tag)
+                  : null;
+            if (!nextNames) return null;
+            return patchPhotoById(p.id, { tags: nextNames });
+          }),
+        )
+      ).filter((p): p is Photo => Boolean(p));
+
+      if (updated.length) {
+        const byId = new Map(updated.map((p) => [p.id, p]));
+        setPhotos((prev) =>
+          sortPhotosLocal(
+            prev.map((p) => byId.get(p.id) ?? p),
+            sort,
+          ),
+        );
+        refreshTags();
+      }
+
+      setBulkTagInput('');
     } finally {
       setBulkBusy(false);
     }
@@ -470,6 +575,9 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         tags={tagsWithAll}
         selectedTags={selectedTags}
         onSelectedTagsChange={setSelectedTags}
+        excludedTags={excludedTags}
+        onExcludedTagsChange={setExcludedTags}
+        onResetTagFilters={resetTagFilters}
         selectionMode={selectionMode}
         selectedPhotoCount={selectedIds.length}
         bulkBusy={bulkBusy}
@@ -537,6 +645,31 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
             >
               블러 해제
             </button>
+            <input
+              value={bulkTagInput}
+              onChange={(e) => setBulkTagInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') bulkUpdateSelectedTags('add');
+              }}
+              placeholder="태그명"
+              className="bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0 w-24 sm:w-36 outline-none"
+            />
+            <button
+              onClick={() => bulkUpdateSelectedTags('add')}
+              disabled={bulkBusy || selectedIds.length === 0 || !bulkTagInput.trim()}
+              className="bg-blue-600/30 hover:bg-blue-600/40 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+              title="내가 올린 사진만 적용"
+            >
+              태그추가
+            </button>
+            <button
+              onClick={() => bulkUpdateSelectedTags('remove')}
+              disabled={bulkBusy || selectedIds.length === 0 || !bulkTagInput.trim()}
+              className="bg-blue-600/20 hover:bg-blue-600/30 disabled:opacity-50 rounded px-2 py-1 text-[11px] sm:text-xs shrink-0"
+              title="내가 올린 사진만 적용"
+            >
+              태그제거
+            </button>
             <button
               onClick={bulkDeleteSelected}
               disabled={bulkBusy || selectedIds.length === 0}
@@ -552,7 +685,7 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
       <main className={selectionMode ? 'pt-[6.5rem]' : 'pt-14'}>
         {loading ? (
           <div className="p-8 text-neutral-400">로딩중...</div>
-        ) : photos.length === 0 ? (
+        ) : photos.length === 0 && giftBoxes.length === 0 ? (
           <div className="p-16 text-center text-neutral-400">
             사진이 없습니다. 드래그앤드롭, 붙여넣기(Cmd+V), 또는 업로드 버튼으로 추가해보세요.
           </div>
@@ -560,12 +693,15 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
           <>
             <Grid
               photos={photos}
+              giftBoxes={giftBoxes}
               currentUser={currentUser}
               columns={columns}
               selectionMode={selectionMode}
               selectedIds={selectedIdSet}
+              openingGiftId={openingGiftId}
               onToggleSelect={toggleSelect}
               onOpen={openLightbox}
+              onOpenGift={openGiftBox}
             />
             <div ref={sentinelRef} className="h-8" />
             {loadingMore && (
@@ -618,6 +754,13 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
         />
       )}
 
+      {giftReveal && (
+        <GiftRevealOverlay
+          gift={giftReveal.gift}
+          burst={giftReveal.phase === 'burst'}
+        />
+      )}
+
       {dragHover && !uploaderOpen && (
         <div className="pointer-events-none fixed inset-0 z-40 bg-blue-500/20 border-4 border-dashed border-blue-400 flex items-center justify-center">
           <div className="bg-black/70 rounded-2xl px-6 py-4 text-xl">
@@ -625,6 +768,74 @@ export default function Gallery({ currentUser }: { currentUser: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function GiftRevealOverlay({ gift, burst }: { gift: GiftBoxSummary; burst: boolean }) {
+  const cardCount = Math.max(
+    1,
+    Math.min(8, gift.previewPhotoIds.length || gift.photoCount || 1),
+  );
+  const indices = Array.from({ length: cardCount }, (_, i) => i);
+
+  return (
+    <div className="fixed inset-0 z-[70] pointer-events-auto">
+      <div className="absolute inset-0 bg-black/72 backdrop-blur-sm" />
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="relative w-[320px] h-[320px] sm:w-[420px] sm:h-[360px]">
+          <div
+            className={
+              'absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-36 h-36 rounded-2xl bg-gradient-to-br from-amber-500 via-orange-600 to-rose-700 border border-white/35 shadow-[0_20px_80px_rgba(0,0,0,0.55)] transition-all duration-500 ' +
+              (burst ? 'scale-90 opacity-85' : 'scale-100 opacity-100')
+            }
+          >
+            <div className="absolute left-1/2 top-0 -translate-x-1/2 h-full w-3 bg-yellow-100/75 mix-blend-screen" />
+            <div className="absolute top-1/2 left-0 -translate-y-1/2 h-3 w-full bg-yellow-100/75 mix-blend-screen" />
+          </div>
+
+          {indices.map((idx) => {
+            const center = (cardCount - 1) / 2;
+            const offset = idx - center;
+            const tx = burst ? offset * 50 : 0;
+            const ty = burst ? -115 - Math.abs(offset) * 8 : -8;
+            const rot = burst ? offset * 12 : 0;
+            const delay = `${idx * 35}ms`;
+            const previewId = gift.previewPhotoIds[idx] ?? null;
+
+            return (
+              <div
+                key={`${gift.id}-card-${idx}`}
+                className="absolute left-1/2 top-1/2 w-24 h-32 sm:w-28 sm:h-36 rounded-xl overflow-hidden border border-white/50 bg-neutral-900 shadow-[0_18px_60px_rgba(0,0,0,0.6)] transition-all duration-700"
+                style={{
+                  transform: `translate(-50%, -50%) translate(${tx}px, ${ty}px) rotate(${rot}deg)`,
+                  opacity: burst ? 1 : 0.18,
+                  transitionDelay: delay,
+                }}
+              >
+                {burst && previewId ? (
+                  <img
+                    src={`/api/photos/${previewId}/thumb`}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-gradient-to-br from-neutral-700 via-neutral-500 to-neutral-300" />
+                )}
+              </div>
+            );
+          })}
+
+          <div className="absolute left-1/2 bottom-1 -translate-x-1/2 text-center w-full px-4">
+            <div className="text-sm sm:text-base font-medium">
+              {burst ? '선물 상자를 열었습니다' : '상자를 여는 중...'}
+            </div>
+            <div className="mt-1 text-xs text-neutral-300">
+              {gift.photoCount}장의 사진을 갤러리에 추가합니다.
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -678,4 +889,8 @@ function asMsOrNull(v: string | null): number | null {
   if (!v) return null;
   const n = Date.parse(v);
   return Number.isNaN(n) ? null : n;
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

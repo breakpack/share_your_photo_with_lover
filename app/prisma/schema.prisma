@@ -27,9 +27,12 @@ model Photo {
   artist     String?
   exifJson   Json?
   ownerName  String
+  giftBoxId  String?
+  giftOrder  Int?
   createdAt  DateTime   @default(now())
   tags       TagOnPhoto[]
   views      PhotoView[]
+  giftBox    GiftBox?   @relation(fields: [giftBoxId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
   @@index([sizeBytes])
@@ -38,6 +41,19 @@ model Photo {
   @@index([sourceCreatedAt])
   @@index([sourceCreatedAt, createdAt, id])
   @@index([sourceModifiedAt])
+  @@index([giftBoxId, giftOrder])
+}
+
+model GiftBox {
+  id           String   @id
+  ownerName    String
+  openedAt     DateTime?
+  openedByName String?
+  createdAt    DateTime @default(now())
+  photos       Photo[]
+
+  @@index([createdAt])
+  @@index([openedAt, createdAt])
 }
 
 model Tag {
